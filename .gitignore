@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+
+# Logs
+logs/*.jsonl
+
+# Student data (privacy)
+students/*.json
+!students/roster.json
+
+# Output images (large binary)
+output/*/images/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Feishu credentials (contains app_secret)
+feishu/cli_*.json

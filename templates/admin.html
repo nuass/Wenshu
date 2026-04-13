@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>飞书推题 · 管理后台</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  .truncate-id { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-800 text-sm" x-data="app()" x-init="init()" x-cloak>
+
+<!-- 布局 -->
+<div class="flex min-h-screen">
+
+  <!-- 侧边栏 -->
+  <aside class="w-44 bg-white border-r border-gray-200 flex flex-col py-6 px-3 gap-1 shrink-0">
+    <div class="text-base font-semibold px-3 mb-4 text-indigo-600">推题管理</div>
+    <template x-for="item in visibleNav" :key="item.id">
+      <button
+        @click="page = item.id"
+        :class="page === item.id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-600 hover:bg-gray-100'"
+        class="flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors">
+        <span x-text="item.icon"></span>
+        <span x-text="item.label"></span>
+      </button>
+    </template>
+    <!-- 退出 -->
+    <div class="mt-auto px-3 pt-4 border-t border-gray-100">
+      <div class="text-xs text-gray-400 mb-1" x-text="currentUser.username"></div>
+      <div class="text-xs text-indigo-500 mb-2" x-text="currentUser.role === 'admin' ? '管理员' : '老师'"></div>
+      <form method="POST" action="/logout">
+        <button type="submit" class="text-xs text-gray-400 hover:text-red-500">退出登录</button>
+      </form>
+    </div>
+  </aside>
+
+  <!-- 主内容 -->
+  <main class="flex-1 p-8 overflow-auto">
+
+    <!-- 概览 -->
+    <div x-show="page === 'overview'">
+      <h1 class="text-xl font-semibold mb-6">概览</h1>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div @click="page='teachers'" class="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-sm">
+          <div class="text-2xl font-bold text-indigo-600" x-text="stats.teacherCount"></div>
+          <div class="text-gray-500 mt-1">老师</div>
+        </div>
+        <div @click="page='students'" class="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-sm">
+          <div class="text-2xl font-bold text-indigo-600" x-text="stats.studentCount"></div>
+          <div class="text-gray-500 mt-1">学生（<span x-text="stats.unnamedCount"></span> 待命名）</div>
+        </div>
+        <div @click="page='chats'" class="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-sm">
+          <div class="text-2xl font-bold text-indigo-600" x-text="stats.chatCount"></div>
+          <div class="text-gray-500 mt-1">飞书群</div>
+        </div>
+        <div class="bg-white rounded-xl border p-5">
+          <div class="text-2xl font-bold text-indigo-600" x-text="stats.totalQuestions"></div>
+          <div class="text-gray-500 mt-1">题库总题数</div>
+        </div>
+      </div>
+
+      <h2 class="font-semibold mb-3">题库状态</h2>
+      <div class="bg-white rounded-xl border overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+            <tr>
+              <th class="px-4 py-3 text-left">老师</th>
+              <th class="px-4 py-3 text-left">科目</th>
+              <th class="px-4 py-3 text-left">题数</th>
+              <th class="px-4 py-3 text-left">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="t in teachers" :key="t.id">
+              <tr class="border-t">
+                <td class="px-4 py-3 font-medium" x-text="t.name"></td>
+                <td class="px-4 py-3 text-gray-500" x-text="t.subject"></td>
+                <td class="px-4 py-3" x-text="t.question_count"></td>
+                <td class="px-4 py-3">
+                  <span :class="t.question_count < 20 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'"
+                    class="px-2 py-0.5 rounded-full text-xs"
+                    x-text="t.question_count < 20 ? '题库不足' : '正常'"></span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 老师管理 -->
+    <div x-show="page === 'teachers'">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">老师管理</h1>
+        <button @click="openTeacherForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">+ 新增老师</button>
+      </div>
+      <div class="bg-white rounded-xl border overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+            <tr>
+              <th class="px-4 py-3 text-left">ID</th>
+              <th class="px-4 py-3 text-left">姓名</th>
+              <th class="px-4 py-3 text-left">科目</th>
+              <th class="px-4 py-3 text-left">飞书 open_id</th>
+              <th class="px-4 py-3 text-left">题数</th>
+              <th class="px-4 py-3 text-left">学生数</th>
+              <th class="px-4 py-3 text-left">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="t in teachers" :key="t.id">
+              <tr class="border-t hover:bg-gray-50">
+                <td class="px-4 py-3 font-mono text-xs text-gray-500" x-text="t.id"></td>
+                <td class="px-4 py-3 font-medium" x-text="t.name"></td>
+                <td class="px-4 py-3 text-gray-500" x-text="t.subject"></td>
+                <td class="px-4 py-3">
+                  <span class="truncate-id font-mono text-xs text-gray-400 block" :title="t.open_id" x-text="t.open_id || '—'"></span>
+                </td>
+                <td class="px-4 py-3">
+                  <span :class="t.question_count < 20 ? 'text-red-600 font-semibold' : ''" x-text="t.question_count"></span>
+                </td>
+                <td class="px-4 py-3" x-text="t.student_count"></td>
+                <td class="px-4 py-3 flex gap-2">
+                  <button @click="openTeacherForm(t)" class="text-indigo-600 hover:underline">编辑</button>
+                  <button @click="deleteTeacher(t)" class="text-red-500 hover:underline">删除</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 学生管理 -->
+    <div x-show="page === 'students'">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">学生管理</h1>
+        <button @click="openStudentForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">+ 新增学生</button>
+      </div>
+      <div class="mb-4">
+        <input x-model="studentSearch" type="text" placeholder="搜索姓名或 open_id…"
+          class="border rounded-lg px-3 py-2 w-72 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <div class="bg-white rounded-xl border overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+            <tr>
+              <th class="px-4 py-3 text-left">姓名</th>
+              <th class="px-4 py-3 text-left">飞书 open_id</th>
+              <th class="px-4 py-3 text-left">绑定老师</th>
+              <th class="px-4 py-3 text-left">飞书群</th>
+              <th class="px-4 py-3 text-left">难度</th>
+              <th class="px-4 py-3 text-left">正确率</th>
+              <th class="px-4 py-3 text-left">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="s in filteredStudents" :key="s.student_id">
+              <tr class="border-t hover:bg-gray-50">
+                <td class="px-4 py-3 font-medium">
+                  <span :class="s.name === '（待填写）' ? 'text-gray-400 italic' : ''" x-text="s.name"></span>
+                </td>
+                <td class="px-4 py-3">
+                  <span class="truncate-id font-mono text-xs text-gray-400 block cursor-help" :title="s.student_id"
+                    x-text="s.student_id.slice(0,16) + '…'"></span>
+                </td>
+                <td class="px-4 py-3">
+                  <template x-for="b in (s.bindings || [])" :key="b.teacher_id">
+                    <span class="inline-block bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded-full mr-1" x-text="b.teacher_id"></span>
+                  </template>
+                  <span x-show="!s.bindings || s.bindings.length === 0" class="text-gray-400">—</span>
+                </td>
+                <td class="px-4 py-3">
+                  <template x-for="b in (s.bindings || [])" :key="b.chat_id">
+                    <span class="truncate-id font-mono text-xs text-gray-400 block cursor-help" :title="b.chat_id"
+                      x-text="b.chat_id ? b.chat_id.slice(0,14)+'…' : ''"></span>
+                  </template>
+                </td>
+                <td class="px-4 py-3" x-text="s.current_difficulty ?? '—'"></td>
+                <td class="px-4 py-3" x-text="s.accuracy != null ? s.accuracy + '%' : '—'"></td>
+                <td class="px-4 py-3 flex gap-2 items-center">
+                  <!-- 推题开关 -->
+                  <button @click="togglePush(s)"
+                    :class="s.push_enabled === false ? 'bg-gray-200 text-gray-500' : 'bg-green-100 text-green-700'"
+                    class="text-xs px-2 py-0.5 rounded-full border transition-colors"
+                    :title="s.push_enabled === false ? '推题已暂停，点击恢复' : '推题中，点击暂停'"
+                    x-text="s.push_enabled === false ? '已暂停' : '推题中'">
+                  </button>
+                  <button @click="openStudentForm(s)" class="text-indigo-600 hover:underline">编辑</button>
+                  <button @click="openPushModal(s)" class="text-indigo-400 hover:underline">推题</button>
+                  <button @click="deleteStudent(s)" class="text-red-500 hover:underline">删除</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="filteredStudents.length === 0">
+              <td colspan="7" class="px-4 py-6 text-center text-gray-400">暂无学生</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 飞书群 -->
+    <div x-show="page === 'chats'">
+      <h1 class="text-xl font-semibold mb-6">飞书群概览</h1>
+      <div class="grid gap-4">
+        <template x-for="c in chats" :key="c.chat_id">
+          <div class="bg-white rounded-xl border p-5">
+            <div class="flex items-start justify-between">
+              <div>
+                <div class="font-mono text-xs text-gray-400 mb-1" x-text="c.chat_id"></div>
+                <div class="flex gap-3 text-sm">
+                  <span class="text-gray-500">老师：<span class="text-gray-800 font-medium" x-text="c.teacher_id"></span></span>
+                  <span class="text-gray-500">科目：<span class="text-gray-800" x-text="c.subject || '—'"></span></span>
+                </div>
+              </div>
+              <span class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full" x-text="c.students.length + ' 名学生'"></span>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <template x-for="stu in c.students" :key="stu.open_id">
+                <span class="bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full" x-text="stu.name"></span>
+              </template>
+            </div>
+          </div>
+        </template>
+        <div x-show="chats.length === 0" class="text-gray-400 text-center py-12">暂无飞书群数据</div>
+      </div>
+    </div>
+
+    <!-- 推题任务 -->
+    <div x-show="page === 'cron'">
+      <h1 class="text-xl font-semibold mb-6">推题任务</h1>
+      <div class="grid gap-4">
+        <template x-for="job in cronJobs" :key="job.id">
+          <div class="bg-white rounded-xl border p-5">
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-medium" x-text="job.name"></span>
+                  <span :class="job.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
+                    class="text-xs px-2 py-0.5 rounded-full"
+                    x-text="job.enabled ? '启用' : '禁用'"></span>
+                </div>
+                <div class="text-xs text-gray-400 mb-1" x-text="job.description"></div>
+                <div class="font-mono text-xs text-indigo-500" x-text="job.schedule?.expr || job.schedule?.description || ''"></div>
+              </div>
+              <button
+                @click="toggleCron(job)"
+                :class="job.enabled ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-indigo-300 text-indigo-600 hover:bg-indigo-50'"
+                class="shrink-0 border rounded-lg px-3 py-1.5 text-xs transition-colors"
+                x-text="job.enabled ? '禁用' : '启用'">
+              </button>
+            </div>
+          </div>
+        </template>
+        <div x-show="cronJobs.length === 0" class="text-gray-400 text-center py-12">暂无任务数据</div>
+      </div>
+    </div>
+
+    <!-- 系统设置 -->
+    <div x-show="page === 'settings'">
+      <h1 class="text-xl font-semibold mb-6">系统设置</h1>
+
+      <!-- 推题频率 -->
+      <div class="bg-white rounded-xl border p-6 mb-5">
+        <h2 class="font-semibold mb-1">推题频率</h2>
+        <p class="text-xs text-gray-400 mb-4">控制系统 cron 自动推题的间隔时间</p>
+        <div class="flex items-center gap-3">
+          <label class="text-sm text-gray-600 w-32">每隔（分钟）</label>
+          <input x-model.number="pushInterval" type="number" min="1" max="1440"
+            class="border rounded-lg px-3 py-2 w-28 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          <button @click="savePushInterval()"
+            class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700">保存</button>
+          <span x-show="pushIntervalSaved" class="text-green-600 text-sm">✓ 已保存</span>
+        </div>
+      </div>
+
+      <!-- 全局参数 -->
+      <div class="bg-white rounded-xl border p-6">
+        <h2 class="font-semibold mb-1">全局推题参数</h2>
+        <p class="text-xs text-gray-400 mb-5">修改后立即生效，影响所有老师和学生</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">去重天数窗口（dedup_days）</label>
+            <p class="text-xs text-gray-400 mb-1.5">同一题在此天数内不重复推送，0 = 不去重</p>
+            <input x-model.number="settings.dedup_days" type="number" min="0"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">薄弱点判定阈值（mastery_threshold）</label>
+            <p class="text-xs text-gray-400 mb-1.5">知识点正确率低于此值视为薄弱，范围 0–1</p>
+            <input x-model.number="settings.mastery_threshold" type="number" min="0.01" max="0.99" step="0.05"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">难度提升阈值（difficulty_up_threshold）</label>
+            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 ≥ 此值则提升难度，范围 0–1</p>
+            <input x-model.number="settings.difficulty_up_threshold" type="number" min="0.01" max="0.99" step="0.05"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">难度降低阈值（difficulty_down_threshold）</label>
+            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 &lt; 此值则降低难度，范围 0–1</p>
+            <input x-model.number="settings.difficulty_down_threshold" type="number" min="0.01" max="0.99" step="0.05"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+        </div>
+        <div x-show="settingsError" class="mt-4 text-red-500 text-xs" x-text="settingsError"></div>
+        <div class="flex items-center gap-3 mt-5">
+          <button @click="saveSettings()"
+            class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700">保存全局参数</button>
+          <span x-show="settingsSaved" class="text-green-600 text-sm">✓ 已保存</span>
+        </div>
+      </div>
+
+      <!-- lark-cli 认证状态 -->
+      <div class="bg-white rounded-xl border p-6 mt-5">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="font-semibold">飞书 Bot 认证状态</h2>
+            <p class="text-xs text-gray-400 mt-0.5">lark-cli 当前授权信息</p>
+          </div>
+          <button @click="checkLarkAuth()"
+            class="border rounded-lg px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50">刷新</button>
+        </div>
+        <div x-show="larkAuth === null" class="text-gray-400 text-sm">点击刷新查看状态</div>
+        <pre x-show="larkAuth !== null"
+          class="bg-gray-50 rounded-lg p-3 text-xs font-mono whitespace-pre-wrap text-gray-700 max-h-40 overflow-auto"
+          x-text="larkAuth"></pre>
+      </div>
+    </div>
+
+    <!-- 题库管理 -->
+    <div x-show="page === 'questions'" x-init="$watch('page', v => v === 'questions' && initQuestions()); if(page==='questions') initQuestions()">
+      <h1 class="text-xl font-semibold mb-6">题库管理</h1>
+
+      <!-- 全局 toast -->
+      <div x-show="qToast.show" x-transition
+        :class="qToast.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'"
+        class="fixed top-4 right-4 z-50 border rounded-xl px-4 py-3 text-sm shadow-lg flex items-center gap-2">
+        <span x-text="qToast.ok ? '✓' : '✗'"></span>
+        <span x-text="qToast.msg"></span>
+      </div>
+
+      <div class="grid gap-6">
+        <template x-for="t in teachers" :key="t.id">
+          <div class="bg-white rounded-xl border p-5">
+
+            <!-- ── 卡片头部 ── -->
+            <div class="flex items-start justify-between mb-3">
+              <div>
+                <div class="font-semibold" x-text="t.name"></div>
+                <div class="text-xs text-gray-400 mt-0.5" x-text="t.subject + ' · ' + t.question_count + ' 道题'"></div>
+              </div>
+              <button @click="openUpload(t)"
+                class="bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg hover:bg-indigo-700">上传 PDF</button>
+            </div>
+
+            <!-- ── 完整性警告条 ── -->
+            <template x-if="integrityState[t.id]">
+              <div class="mb-3">
+                <div x-show="integrityState[t.id].ok === false"
+                  class="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                  <span>⚠️</span>
+                  <span>题库不完整：已解析 <strong x-text="integrityState[t.id].actual"></strong> 题，预期 <strong x-text="integrityState[t.id].expected"></strong> 题，缺少 <strong x-text="integrityState[t.id].missing"></strong> 题</span>
+                </div>
+                <div x-show="integrityState[t.id].ok === true && integrityState[t.id].expected !== null"
+                  class="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-700">
+                  <span>✓ 题库完整</span>
+                  <span class="text-green-500" x-text="'(' + integrityState[t.id].actual + '/' + integrityState[t.id].expected + ')'"></span>
+                </div>
+              </div>
+            </template>
+
+            <!-- ── 上传区域 ── -->
+            <div x-show="uploadState[t.id]" class="mb-3">
+              <div x-show="uploadState[t.id]?.status === 'idle'" class="flex items-center gap-3">
+                <input type="file" accept=".pdf" @change="onFileSelect(t.id, $event)"
+                  class="text-xs text-gray-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-indigo-50 file:text-indigo-700">
+                <button @click="doUpload(t.id)"
+                  :disabled="!uploadState[t.id]?.file"
+                  class="bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg hover:bg-indigo-700 disabled:opacity-40">开始解析</button>
+              </div>
+              <div x-show="uploadState[t.id]?.status === 'uploading'" class="text-xs text-indigo-500">上传中…</div>
+              <div x-show="['running','pending'].includes(uploadState[t.id]?.status)" class="space-y-2">
+                <div class="flex items-center gap-2 text-xs text-indigo-600">
+                  <svg class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+                  解析中，请稍候…
+                </div>
+                <pre class="bg-gray-50 rounded p-2 text-xs font-mono max-h-32 overflow-auto text-gray-600"
+                  x-text="uploadState[t.id]?.log || ''"></pre>
+              </div>
+              <div x-show="uploadState[t.id]?.status === 'done'" class="text-xs text-green-600">✓ 解析完成</div>
+              <div x-show="uploadState[t.id]?.status === 'error'" class="text-xs text-red-500">解析失败，查看日志</div>
+            </div>
+
+            <!-- ── 题目列表区 ── -->
+            <template x-if="questionState[t.id]">
+              <div>
+                <!-- 过滤栏 -->
+                <div class="flex flex-wrap gap-2 mb-3 items-center">
+                  <input
+                    x-model="questionState[t.id].filter.search"
+                    @input.debounce.400ms="loadQuestions(t.id, 1)"
+                    placeholder="搜索题目文字/知识点…"
+                    class="border rounded-lg px-3 py-1.5 text-xs flex-1 min-w-32 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  <select
+                    x-model="questionState[t.id].filter.chapter"
+                    @change="loadQuestions(t.id, 1)"
+                    class="border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="">全部章节</option>
+                    <template x-for="ch in (questionState[t.id].chapters || [])" :key="ch">
+                      <option :value="ch" x-text="ch"></option>
+                    </template>
+                  </select>
+                  <select
+                    x-model="questionState[t.id].filter.difficulty"
+                    @change="loadQuestions(t.id, 1)"
+                    class="border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="">全部难度</option>
+                    <option value="1">难度 1</option>
+                    <option value="2">难度 2</option>
+                    <option value="3">难度 3</option>
+                    <option value="4">难度 4</option>
+                    <option value="5">难度 5</option>
+                  </select>
+                  <span class="text-xs text-gray-400 ml-auto"
+                    x-text="'共 ' + (questionState[t.id].total || 0) + ' 题'"></span>
+                </div>
+
+                <!-- 题目表格 -->
+                <div class="overflow-x-auto rounded-lg border">
+                  <table class="w-full text-xs">
+                    <thead class="bg-gray-50 text-gray-400">
+                      <tr>
+                        <th class="px-3 py-2 text-left w-5"></th>
+                        <th class="px-3 py-2 text-left w-10">ID</th>
+                        <th class="px-3 py-2 text-left">章节</th>
+                        <th class="px-3 py-2 text-left">知识点</th>
+                        <th class="px-3 py-2 text-center w-14">难度</th>
+                        <th class="px-3 py-2 text-center w-14">题型</th>
+                        <th class="px-3 py-2 text-center w-12">答案</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-if="questionState[t.id].loading">
+                        <tr><td colspan="7" class="px-4 py-6 text-center text-gray-400 text-xs">加载中…</td></tr>
+                      </template>
+                      <template x-if="!questionState[t.id].loading && questionState[t.id].questions?.length === 0">
+                        <tr><td colspan="7" class="px-4 py-6 text-center text-gray-400 text-xs">无匹配题目</td></tr>
+                      </template>
+                      <template x-for="q in (questionState[t.id].questions || [])" :key="q.id">
+                        <tr>
+                          <td colspan="7" class="border-t p-0">
+                            <!-- 折叠行头 -->
+                            <div class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 select-none"
+                              @click="expandedQuestion === (t.id+'_'+q.id) ? expandedQuestion=null : expandedQuestion=(t.id+'_'+q.id)">
+                              <span class="text-gray-300 w-3" x-text="expandedQuestion===(t.id+'_'+q.id)?'▼':'▶'"></span>
+                              <span class="w-10 text-gray-500 font-mono" x-text="q.id"></span>
+                              <span class="w-32 text-gray-600 truncate" x-text="q.chapter||'—'"></span>
+                              <span class="flex-1 text-gray-400 truncate">
+                                <template x-for="tag in (q.topic_tags||[])" :key="tag">
+                                  <span class="inline-block bg-blue-50 text-blue-600 rounded px-1 mr-1" x-text="tag"></span>
+                                </template>
+                              </span>
+                              <span class="w-14 text-center">
+                                <span :class="{
+                                  'bg-green-100 text-green-700': q.difficulty<=2,
+                                  'bg-yellow-100 text-yellow-700': q.difficulty===3,
+                                  'bg-red-100 text-red-700': q.difficulty>=4
+                                }" class="px-1.5 py-0.5 rounded text-xs" x-text="q.difficulty??'—'"></span>
+                              </span>
+                              <span class="w-14 text-center text-gray-500" x-text="q.question_type||'—'"></span>
+                              <span class="w-12 text-center font-mono text-indigo-600 font-semibold" x-text="q.correct_answer||'—'"></span>
+                            </div>
+
+                            <!-- 展开详情区 -->
+                            <div x-show="expandedQuestion===(t.id+'_'+q.id)" class="bg-gray-50 border-t px-4 pb-4 pt-3">
+                              <!-- 图片区 -->
+                              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                <div x-show="q.question_image">
+                                  <div class="text-xs text-gray-400 mb-1">题目图片</div>
+                                  <img :src="'/api/image?path='+encodeURIComponent(q.question_image)"
+                                    class="rounded border max-w-full max-h-72 object-contain bg-white" loading="lazy">
+                                </div>
+                                <div x-show="q.answer_image">
+                                  <div class="text-xs text-gray-400 mb-1">解析图片</div>
+                                  <img :src="'/api/image?path='+encodeURIComponent(q.answer_image)"
+                                    class="rounded border max-w-full max-h-72 object-contain bg-white" loading="lazy">
+                                </div>
+                              </div>
+
+                              <!-- 编辑区 -->
+                              <div class="border-t pt-3">
+                                <div class="text-xs text-gray-400 mb-2 font-medium">编辑字段</div>
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                                  <!-- 章节 -->
+                                  <div>
+                                    <label class="block text-xs text-gray-500 mb-1">章节</label>
+                                    <input :id="'edit-chapter-'+t.id+'-'+q.id"
+                                      :value="q.chapter||''"
+                                      @input="q.chapter=$event.target.value"
+                                      class="w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                                  </div>
+                                  <!-- 难度 -->
+                                  <div>
+                                    <label class="block text-xs text-gray-500 mb-1">难度（1-5）</label>
+                                    <select :value="q.difficulty"
+                                      @change="q.difficulty=Number($event.target.value)"
+                                      class="w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                                      <option value="1">1 基础</option>
+                                      <option value="2">2 简单</option>
+                                      <option value="3">3 中等</option>
+                                      <option value="4">4 较难</option>
+                                      <option value="5">5 难题</option>
+                                    </select>
+                                  </div>
+                                  <!-- 题型 -->
+                                  <div>
+                                    <label class="block text-xs text-gray-500 mb-1">题型</label>
+                                    <select :value="q.question_type"
+                                      @change="q.question_type=$event.target.value"
+                                      class="w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                                      <option value="单选">单选</option>
+                                      <option value="多选">多选</option>
+                                      <option value="自由作答">自由作答</option>
+                                    </select>
+                                  </div>
+                                  <!-- 答案 -->
+                                  <div>
+                                    <label class="block text-xs text-gray-500 mb-1">正确答案</label>
+                                    <input :value="q.correct_answer||''"
+                                      @input="q.correct_answer=$event.target.value.toUpperCase()"
+                                      maxlength="5"
+                                      class="w-full border rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                                  </div>
+                                </div>
+
+                                <!-- 知识点标签 -->
+                                <div class="mb-3">
+                                  <label class="block text-xs text-gray-500 mb-1">知识点标签</label>
+                                  <div class="flex flex-wrap gap-1 mb-1">
+                                    <template x-for="(tag, ti) in (q.topic_tags||[])" :key="ti">
+                                      <span class="inline-flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded px-2 py-0.5">
+                                        <span x-text="tag"></span>
+                                        <button @click="q.topic_tags.splice(ti,1)" class="text-blue-400 hover:text-red-500 leading-none">×</button>
+                                      </span>
+                                    </template>
+                                  </div>
+                                  <div class="flex gap-2">
+                                    <input :id="'newtag-'+t.id+'-'+q.id"
+                                      placeholder="输入新标签后按 Enter"
+                                      class="border rounded px-2 py-1 text-xs flex-1 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                                      @keydown.enter.prevent="
+                                        const v=$event.target.value.trim();
+                                        if(v){
+                                          if(!q.topic_tags) q.topic_tags=[];
+                                          q.topic_tags.push(v);
+                                          $event.target.value='';
+                                        }
+                                      ">
+                                  </div>
+                                </div>
+
+                                <!-- 保存按钮 -->
+                                <div class="flex items-center gap-3">
+                                  <button @click="updateQuestion(t.id, q)"
+                                    class="bg-indigo-600 text-white px-4 py-1.5 text-xs rounded-lg hover:bg-indigo-700">
+                                    保存修改
+                                  </button>
+                                  <span x-show="q._saving" class="text-xs text-gray-400">保存中…</span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- 分页控件 -->
+                <div x-show="(questionState[t.id].total_pages||1) > 1"
+                  class="flex items-center justify-between mt-3 text-xs text-gray-500">
+                  <button
+                    @click="loadQuestions(t.id, questionState[t.id].page - 1)"
+                    :disabled="questionState[t.id].page <= 1"
+                    class="px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-40">← 上一页</button>
+                  <span x-text="'第 ' + questionState[t.id].page + ' / ' + questionState[t.id].total_pages + ' 页'"></span>
+                  <button
+                    @click="loadQuestions(t.id, questionState[t.id].page + 1)"
+                    :disabled="questionState[t.id].page >= questionState[t.id].total_pages"
+                    class="px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-40">下一页 →</button>
+                </div>
+              </div>
+            </template>
+
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 日志 -->
+    <div x-show="page === 'logs'">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">推题日志</h1>
+        <div class="flex gap-2">
+          <button @click="logType='push'; loadLogs()"
+            :class="logType==='push' ? 'bg-indigo-600 text-white' : 'border text-gray-600 hover:bg-gray-50'"
+            class="px-3 py-1.5 rounded-lg text-xs">推题记录</button>
+          <button @click="logType='answer'; loadLogs()"
+            :class="logType==='answer' ? 'bg-indigo-600 text-white' : 'border text-gray-600 hover:bg-gray-50'"
+            class="px-3 py-1.5 rounded-lg text-xs">答题记录</button>
+          <button @click="loadLogs()" class="border rounded-lg px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50">刷新</button>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border overflow-hidden">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-50 text-gray-400 uppercase">
+            <tr>
+              <th class="px-4 py-3 text-left">时间</th>
+              <th class="px-4 py-3 text-left">学生</th>
+              <th x-show="logType==='push'" class="px-4 py-3 text-left">题目 ID</th>
+              <th x-show="logType==='push'" class="px-4 py-3 text-left">老师</th>
+              <th x-show="logType==='answer'" class="px-4 py-3 text-left">原文</th>
+              <th x-show="logType==='answer'" class="px-4 py-3 text-left">解析答案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in logs" :key="r.record_id">
+              <tr class="border-t hover:bg-gray-50">
+                <td class="px-4 py-2 text-gray-400 whitespace-nowrap" x-text="r.timestamp?.slice(0,16).replace('T',' ')"></td>
+                <td class="px-4 py-2 font-mono truncate max-w-[120px]" :title="r.student_id" x-text="r.student_id?.slice(0,12)+'…'"></td>
+                <td x-show="logType==='push'" class="px-4 py-2" x-text="(r.question_ids||[]).join(', ')"></td>
+                <td x-show="logType==='push'" class="px-4 py-2 text-gray-500" x-text="r.teacher_id||'—'"></td>
+                <td x-show="logType==='answer'" class="px-4 py-2 text-gray-600 max-w-[200px] truncate" :title="r.raw_text" x-text="r.raw_text||'—'"></td>
+                <td x-show="logType==='answer'" class="px-4 py-2 font-mono" x-text="r.parsed_answers ? JSON.stringify(r.parsed_answers) : '—'"></td>
+              </tr>
+            </template>
+            <tr x-show="logs.length === 0">
+              <td colspan="6" class="px-4 py-8 text-center text-gray-400">暂无日志</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- 老师表单弹窗 -->
+<div x-show="teacherModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" @click.stop>
+    <h2 class="text-lg font-semibold mb-5" x-text="teacherModal.isEdit ? '编辑老师' : '新增老师'"></h2>
+    <div class="space-y-4">
+      <div x-show="!teacherModal.isEdit">
+        <label class="block text-xs text-gray-500 mb-1">老师 ID（英文，不可改）</label>
+        <input x-model="teacherModal.form.id" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="如 chenxi">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">姓名</label>
+        <input x-model="teacherModal.form.name" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">科目</label>
+        <input x-model="teacherModal.form.subject" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="如 AP统计">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">飞书 open_id</label>
+        <input x-model="teacherModal.form.open_id" class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="ou_xxx">
+      </div>
+      <div x-show="teacherModal.isEdit" class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">每次推题数（push_count）</label>
+          <input x-model.number="teacherModal.form.push_count" type="number" min="1" max="20"
+            class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">答题选项（逗号分隔）</label>
+          <input x-model="teacherModal.form.answer_options"
+            class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            placeholder="A,B,C,D">
+        </div>
+      </div>
+      <div x-show="teacherModal.isEdit">
+        <div class="text-xs text-gray-500 mb-2 font-medium">答题反馈消息模板
+          <span class="font-normal text-gray-400 ml-1">支持变量：{correct_answer} {student_answer} {student_name}</span>
+        </div>
+        <div class="space-y-2">
+          <div>
+            <label class="text-xs text-gray-400">答对时</label>
+            <input x-model="teacherModal.form.tpl_correct"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400">答错时</label>
+            <input x-model="teacherModal.form.tpl_wrong"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400">无标准答案时</label>
+            <input x-model="teacherModal.form.tpl_no_answer"
+              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div x-show="teacherModal.error" class="mt-3 text-red-500 text-xs" x-text="teacherModal.error"></div>
+    <div class="flex justify-end gap-3 mt-6">
+      <button @click="teacherModal.open = false" class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">取消</button>
+      <button @click="saveTeacher()" class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 学生表单弹窗 -->
+<div x-show="studentModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+    <h2 class="text-lg font-semibold mb-5" x-text="studentModal.isEdit ? '编辑学生' : '新增学生'"></h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">姓名</label>
+        <input x-model="studentModal.form.name" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <div x-show="!studentModal.isEdit">
+        <label class="block text-xs text-gray-500 mb-1">飞书 open_id（必填）</label>
+        <input x-model="studentModal.form.open_id" class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="ou_xxx">
+      </div>
+      <div x-show="studentModal.isEdit">
+        <label class="block text-xs text-gray-500 mb-1">难度（1-5）</label>
+        <input x-model.number="studentModal.form.difficulty" type="number" min="1" max="5"
+          class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+
+      <!-- 绑定关系 -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-xs text-gray-500">绑定关系</label>
+          <button @click="studentModal.form.bindings.push({teacher_id:'',subject:'',chat_id:''})"
+            class="text-xs text-indigo-600 hover:underline">+ 添加绑定</button>
+        </div>
+        <template x-for="(b, i) in studentModal.form.bindings" :key="i">
+          <div class="border rounded-lg p-3 mb-2 space-y-2 bg-gray-50">
+            <div class="flex gap-2">
+              <div class="flex-1">
+                <label class="text-xs text-gray-400">老师</label>
+                <select x-model="b.teacher_id" @change="autoFillSubject(b)"
+                  class="w-full border rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300">
+                  <option value="">选择老师</option>
+                  <template x-for="t in teachers" :key="t.id">
+                    <option :value="t.id" x-text="t.name + ' (' + t.id + ')'"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="flex-1">
+                <label class="text-xs text-gray-400">科目</label>
+                <input x-model="b.subject" class="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-300" placeholder="自动填入">
+              </div>
+            </div>
+            <div class="flex gap-2 items-end">
+              <div class="flex-1">
+                <label class="text-xs text-gray-400">飞书群 chat_id</label>
+                <input x-model="b.chat_id" class="w-full border rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-indigo-300" placeholder="oc_xxx">
+              </div>
+              <button @click="studentModal.form.bindings.splice(i,1)" class="text-red-400 hover:text-red-600 pb-1.5 text-lg leading-none">×</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div x-show="studentModal.error" class="mt-3 text-red-500 text-xs" x-text="studentModal.error"></div>
+    <div class="flex justify-end gap-3 mt-6">
+      <button @click="studentModal.open = false" class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">取消</button>
+      <button @click="saveStudent()" class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 确认弹窗 -->
+<div x-show="confirm.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+    <h2 class="font-semibold mb-2" x-text="confirm.title"></h2>
+    <p class="text-gray-500 text-sm mb-6" x-text="confirm.message"></p>
+    <div class="flex justify-end gap-3">
+      <button @click="confirm.open = false" class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">取消</button>
+      <button @click="confirm.action(); confirm.open = false" class="px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 手动推题弹窗 -->
+<div x-show="pushModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" @click.stop>
+    <h2 class="text-lg font-semibold mb-1">手动推题</h2>
+    <p class="text-xs text-gray-400 mb-5">为 <span class="font-medium text-gray-700" x-text="pushModal.studentName"></span> 推送题目，留空则按默认逻辑推送</p>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">章节（chapter）</label>
+        <input x-model="pushModal.form.chapter" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="留空不过滤">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">难度（1-5）</label>
+        <input x-model="pushModal.form.difficulty" type="number" min="1" max="5"
+          class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="留空不过滤">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">指定题目 ID（逗号分隔）</label>
+        <input x-model="pushModal.form.question_ids" class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="如 1,2,3，留空不过滤">
+      </div>
+    </div>
+    <div x-show="pushModal.result" class="mt-4 p-3 rounded-lg bg-gray-50 text-xs text-gray-600" x-text="pushModal.result"></div>
+    <div class="flex justify-end gap-3 mt-6">
+      <button @click="pushModal.open = false" class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">关闭</button>
+      <button @click="doPush()" :disabled="pushModal.loading"
+        class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50"
+        x-text="pushModal.loading ? '推送中…' : '立即推送'">
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+function app() {
+  return {
+    page: 'overview',
+    nav: [
+      { id: 'overview',  icon: '📋', label: '概览' },
+      { id: 'teachers',  icon: '👩‍🏫', label: '老师管理' },
+      { id: 'students',  icon: '👨‍🎓', label: '学生管理' },
+      { id: 'chats',     icon: '💬', label: '飞书群' },
+      { id: 'cron',      icon: '⏰', label: '推题任务' },
+      { id: 'questions', icon: '📚', label: '题库管理' },
+      { id: 'logs',      icon: '📜', label: '日志' },
+      { id: 'settings',  icon: '⚙️', label: '系统设置' },
+    ],
+    teachers: [],
+    students: [],
+    chats: [],
+    cronJobs: [],
+    studentSearch: '',
+    currentUser: { username: '', role: '', teacher_id: '' },
+    stats: { teacherCount: 0, studentCount: 0, unnamedCount: 0, chatCount: 0, totalQuestions: 0 },
+    settings: { dedup_days: 7, mastery_threshold: 0.6, difficulty_up_threshold: 0.8, difficulty_down_threshold: 0.5 },
+    settingsSaved: false,
+    settingsError: '',
+    pushInterval: null,
+    pushIntervalSaved: false,
+    larkAuth: null,
+    logs: [],
+    logType: 'push',
+    uploadState: {},
+    questionPreviews: {},   // kept for upload-done preview compat
+    questionState: {},      // tid -> { questions, page, total, total_pages, filter, chapters, loading }
+    integrityState: {},     // tid -> { expected, actual, missing, ok }
+    expandedQuestion: null,
+    qToast: { show: false, ok: true, msg: '' },
+
+    teacherModal: { open: false, isEdit: false, form: {}, error: '' },
+    studentModal: { open: false, isEdit: false, form: {}, error: '' },
+    confirm: { open: false, title: '', message: '', action: () => {} },
+    pushModal: { open: false, studentId: '', studentName: '', form: { chapter: '', difficulty: '', question_ids: '' }, result: '', loading: false },
+
+    async init() {
+      const me = await fetch('/api/me').then(r => r.json());
+      this.currentUser = me;
+      await Promise.all([this.loadTeachers(), this.loadStudents(), this.loadChats(), this.loadCron(), this.loadSettings()]);
+      this.computeStats();
+    },
+
+    get visibleNav() {
+      const adminOnly = new Set(['settings', 'logs']);
+      if (this.currentUser.role === 'admin') return this.nav;
+      return this.nav.filter(n => !adminOnly.has(n.id));
+    },
+
+    async loadTeachers() {
+      const r = await fetch('/api/teachers').then(r => r.json());
+      this.teachers = r;
+    },
+    async loadStudents() {
+      const r = await fetch('/api/students').then(r => r.json());
+      this.students = r;
+    },
+    async loadChats() {
+      const r = await fetch('/api/chats').then(r => r.json());
+      this.chats = r;
+    },
+    async loadCron() {
+      const r = await fetch('/api/cron').then(r => r.json());
+      this.cronJobs = r;
+    },
+    async loadSettings() {
+      const [cfg, interval] = await Promise.all([
+        fetch('/api/config').then(r => r.json()),
+        fetch('/api/cron/push-interval').then(r => r.json()),
+      ]);
+      if (cfg.dedup_days !== undefined) {
+        this.settings.dedup_days = cfg.dedup_days;
+        this.settings.mastery_threshold = cfg.mastery_threshold;
+        this.settings.difficulty_up_threshold = cfg.difficulty_up_threshold;
+        this.settings.difficulty_down_threshold = cfg.difficulty_down_threshold;
+      }
+      this.pushInterval = interval.minutes ?? 10;
+    },
+    async saveSettings() {
+      this.settingsError = '';
+      const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.settings),
+      }).then(r => r.json());
+      if (r.error) { this.settingsError = r.error + (r.fields ? ': ' + JSON.stringify(r.fields) : ''); return; }
+      this.settingsSaved = true;
+      setTimeout(() => this.settingsSaved = false, 2000);
+    },
+    async savePushInterval() {
+      const r = await fetch('/api/cron/push-interval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes: Number(this.pushInterval) }),
+      }).then(r => r.json());
+      if (r.error) { this.settingsError = r.error; return; }
+      this.pushIntervalSaved = true;
+      setTimeout(() => this.pushIntervalSaved = false, 2000);
+    },
+    async toggleCron(job) {
+      const r = await fetch(`/api/cron/${job.id}/toggle`, { method: 'POST' }).then(r => r.json());
+      if (r.ok) job.enabled = r.enabled;
+    },
+
+    computeStats() {
+      this.stats.teacherCount = this.teachers.length;
+      this.stats.studentCount = this.students.length;
+      this.stats.unnamedCount = this.students.filter(s => s.name === '（待填写）').length;
+      this.stats.chatCount = this.chats.length;
+      this.stats.totalQuestions = this.teachers.reduce((s, t) => s + (t.question_count || 0), 0);
+    },
+
+    get filteredStudents() {
+      const q = this.studentSearch.trim().toLowerCase();
+      if (!q) return this.students;
+      return this.students.filter(s =>
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.student_id || '').toLowerCase().includes(q)
+      );
+    },
+
+    // ── 老师 ──
+    openTeacherForm(t = null) {
+      this.teacherModal.isEdit = !!t;
+      this.teacherModal.error = '';
+      this.teacherModal.form = t
+        ? { id: t.id, name: t.name, subject: t.subject, open_id: t.open_id,
+            push_count: t.push_count ?? 3,
+            answer_options: (t.answer_options || ['A','B','C','D']).join(','),
+            tpl_correct: '', tpl_wrong: '', tpl_no_answer: '' }
+        : { id: '', name: '', subject: '', open_id: '', push_count: 3, answer_options: 'A,B,C,D',
+            tpl_correct: '', tpl_wrong: '', tpl_no_answer: '' };
+      if (t) {
+        fetch(`/api/teachers/${t.id}/templates`).then(r => r.json()).then(tpl => {
+          this.teacherModal.form.tpl_correct   = tpl.correct   || '';
+          this.teacherModal.form.tpl_wrong     = tpl.wrong     || '';
+          this.teacherModal.form.tpl_no_answer = tpl.no_answer || '';
+        });
+      }
+      this.teacherModal.open = true;
+    },
+    async saveTeacher() {
+      const f = this.teacherModal.form;
+      const opts = f.answer_options.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+      let res;
+      if (this.teacherModal.isEdit) {
+        res = await fetch(`/api/teachers/${f.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: f.name, subject: f.subject, open_id: f.open_id,
+                                 push_count: Number(f.push_count), answer_options: opts }),
+        }).then(r => r.json());
+        if (!res.error && (f.tpl_correct || f.tpl_wrong || f.tpl_no_answer)) {
+          await fetch(`/api/teachers/${f.id}/templates`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ correct: f.tpl_correct, wrong: f.tpl_wrong, no_answer: f.tpl_no_answer }),
+          });
+        }
+      } else {
+        res = await fetch('/api/teachers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(f),
+        }).then(r => r.json());
+      }
+      if (res.error) { this.teacherModal.error = res.error; return; }
+      this.teacherModal.open = false;
+      await this.loadTeachers();
+      this.computeStats();
+    },
+    deleteTeacher(t) {
+      const msg = t.student_count > 0
+        ? `${t.name} 有 ${t.student_count} 名绑定学生，删除后绑定关系将断开。确认删除？`
+        : `确认删除老师「${t.name}」？`;
+      this.confirm = {
+        open: true,
+        title: '删除老师',
+        message: msg,
+        action: async () => {
+          await fetch(`/api/teachers/${t.id}?force=1`, { method: 'DELETE' });
+          await this.loadTeachers();
+          this.computeStats();
+        },
+      };
+    },
+
+    // ── 学生 ──
+    openStudentForm(s = null) {
+      this.studentModal.isEdit = !!s;
+      this.studentModal.error = '';
+      this.studentModal.form = s ? {
+        open_id: s.student_id,
+        name: s.name === '（待填写）' ? '' : s.name,
+        difficulty: s.current_difficulty ?? 3,
+        bindings: JSON.parse(JSON.stringify(s.bindings || [])),
+      } : {
+        open_id: '',
+        name: '',
+        difficulty: 3,
+        bindings: [],
+      };
+      this.studentModal.open = true;
+    },
+    autoFillSubject(binding) {
+      const t = this.teachers.find(t => t.id === binding.teacher_id);
+      if (t && !binding.subject) binding.subject = t.subject;
+    },
+    async saveStudent() {
+      const f = this.studentModal.form;
+      let res;
+      if (this.studentModal.isEdit) {
+        res = await fetch(`/api/students/${f.open_id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: f.name || '（待填写）', difficulty: f.difficulty, bindings: f.bindings }),
+        }).then(r => r.json());
+      } else {
+        if (!f.open_id.trim()) { this.studentModal.error = 'open_id 必填'; return; }
+        res = await fetch('/api/students', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ open_id: f.open_id.trim(), name: f.name || '（待填写）', bindings: f.bindings }),
+        }).then(r => r.json());
+      }
+      if (res.error) { this.studentModal.error = res.error; return; }
+      this.studentModal.open = false;
+      await Promise.all([this.loadStudents(), this.loadChats()]);
+      this.computeStats();
+    },
+    deleteStudent(s) {
+      this.confirm = {
+        open: true,
+        title: '删除学生',
+        message: `确认删除学生「${s.name}」？画像数据将一并删除。`,
+        action: async () => {
+          await fetch(`/api/students/${s.student_id}`, { method: 'DELETE' });
+          await Promise.all([this.loadStudents(), this.loadChats()]);
+          this.computeStats();
+        },
+      };
+    },
+    async togglePush(s) {
+      const r = await fetch(`/api/students/${s.student_id}/toggle-push`, { method: 'POST' }).then(r => r.json());
+      if (r.ok) s.push_enabled = r.push_enabled;
+    },
+    openPushModal(s) {
+      this.pushModal = { open: true, studentId: s.student_id, studentName: s.name,
+                         form: { chapter: '', difficulty: '', question_ids: '' }, result: '', loading: false };
+    },
+    async doPush() {
+      this.pushModal.loading = true;
+      this.pushModal.result = '';
+      const f = this.pushModal.form;
+      const body = {};
+      if (f.chapter.trim())      body.chapter = f.chapter.trim();
+      if (f.difficulty !== '')   body.difficulty = Number(f.difficulty);
+      if (f.question_ids.trim()) body.question_ids = f.question_ids.split(',').map(s => Number(s.trim())).filter(Boolean);
+      const r = await fetch(`/api/push/${this.pushModal.studentId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+      this.pushModal.loading = false;
+      if (r.error) { this.pushModal.result = '错误：' + r.error; return; }
+      const cnt = (r.questions || []).length;
+      this.pushModal.result = cnt > 0 ? `✓ 已推送 ${cnt} 道题目` : (r.message || '无匹配题目');
+    },
+
+    // ── P3: 题库管理 ──
+    _showQToast(msg, ok = true) {
+      this.qToast = { show: true, ok, msg };
+      setTimeout(() => this.qToast.show = false, 2500);
+    },
+
+    async initQuestions() {
+      // teachers 可能还没加载，等一下
+      if (this.teachers.length === 0) {
+        await this.loadTeachers();
+        this.computeStats();
+      }
+      for (const t of this.teachers) {
+        // 初始化 questionState
+        if (!this.questionState[t.id]) {
+          this.questionState[t.id] = {
+            questions: [], page: 1, total: 0, total_pages: 1,
+            filter: { search: '', chapter: '', difficulty: '' },
+            chapters: [], loading: false,
+          };
+        }
+        // 加载完整性
+        if (!this.integrityState[t.id]) {
+          this.loadIntegrity(t.id);
+        }
+        // 每次进入页面都加载（除非正在加载中）
+        if (!this.questionState[t.id].loading) {
+          this.loadQuestions(t.id, this.questionState[t.id].page || 1);
+        }
+      }
+    },
+
+    async loadQuestions(tid, page = 1) {
+      const state = this.questionState[tid];
+      if (!state) return;
+      state.loading = true;
+      const f = state.filter;
+      const params = new URLSearchParams({
+        page,
+        page_size: 20,
+        ...(f.chapter    ? { chapter: f.chapter }       : {}),
+        ...(f.difficulty ? { difficulty: f.difficulty } : {}),
+        ...(f.search     ? { search: f.search }         : {}),
+      });
+      const r = await fetch(`/api/questions/${tid}/preview?${params}`).then(r => r.json()).catch(() => ({}));
+      state.loading = false;
+      if (r.questions !== undefined) {
+        state.questions   = r.questions;
+        state.page        = r.page        ?? page;
+        state.total       = r.total       ?? 0;
+        state.total_pages = r.total_pages ?? 1;
+        if (r.chapters)   state.chapters = r.chapters;
+      }
+      // 切页时收起展开的题目
+      this.expandedQuestion = null;
+    },
+
+    async loadIntegrity(tid) {
+      const r = await fetch(`/api/questions/${tid}/integrity`).then(r => r.json()).catch(() => ({}));
+      this.integrityState[tid] = r;
+    },
+
+    async updateQuestion(tid, q) {
+      q._saving = true;
+      const payload = {
+        chapter:        q.chapter        || '',
+        topic_tags:     q.topic_tags     || [],
+        difficulty:     Number(q.difficulty) || 3,
+        question_type:  q.question_type  || '单选',
+        correct_answer: q.correct_answer || '',
+      };
+      const r = await fetch(`/api/questions/${tid}/${q.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(r => r.json()).catch(() => ({ error: '网络错误' }));
+      q._saving = false;
+      if (r.ok) {
+        // 用服务器返回值更新本地
+        Object.assign(q, r.question);
+        this._showQToast(`题目 ${q.id} 保存成功`, true);
+      } else {
+        this._showQToast(r.error || '保存失败', false);
+      }
+    },
+
+    // ── P3: 认证状态 ──
+    async checkLarkAuth() {
+      const r = await fetch('/api/lark/auth-status').then(r => r.json());
+      this.larkAuth = r.output || (r.ok ? '已授权' : '未授权');
+    },
+
+    // ── P3: 日志 ──
+    async loadLogs() {
+      const r = await fetch(`/api/logs?type=${this.logType}&limit=50`).then(r => r.json());
+      this.logs = (r.records || []).reverse();
+    },
+
+    // ── P3: 题库上传 ──
+    async loadQuestionPreviews() {
+      // 保留兼容入口，实际调用 initQuestions
+      this.initQuestions();
+    },
+    openUpload(t) {
+      if (!this.uploadState[t.id]) {
+        this.uploadState[t.id] = { status: 'idle', file: null, log: '', preview: null };
+      }
+    },
+    onFileSelect(tid, event) {
+      const file = event.target.files[0];
+      if (file) this.uploadState[tid].file = file;
+    },
+    async doUpload(tid) {
+      const state = this.uploadState[tid];
+      if (!state?.file) return;
+      state.status = 'uploading';
+      const fd = new FormData();
+      fd.append('file', state.file);
+      const r = await fetch(`/api/questions/${tid}/upload`, { method: 'POST', body: fd }).then(r => r.json());
+      if (r.error) { state.status = 'error'; state.log = r.error; return; }
+      state.status = 'pending';
+      state.taskId = r.task_id;
+      this._pollUpload(tid, r.task_id);
+    },
+    _pollUpload(tid, taskId) {
+      const poll = async () => {
+        const r = await fetch(`/api/questions/${tid}/status?task_id=${taskId}`).then(r => r.json());
+        const state = this.uploadState[tid];
+        state.status = r.status;
+        state.log = r.log_tail || '';
+        if (r.status === 'running' || r.status === 'pending') {
+          setTimeout(poll, 2000);
+        } else if (r.status === 'done') {
+          // 刷新题目列表和完整性
+          delete this.questionState[tid];
+          await this.loadTeachers();
+          this.computeStats();
+          this.initQuestions();
+        }
+      };
+      setTimeout(poll, 1000);
+    },
+  };
+}
+</script>
+</body>
+</html>

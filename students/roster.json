@@ -1,0 +1,61 @@
+{
+  "teachers": {
+    "chenxi": {
+      "open_id": "ou_760f8a027f1ec04ad6edb55e394693b4",
+      "name": "王晨曦",
+      "subject": "AP统计",
+      "questions_file": "output/chenxi/questions.json",
+      "push_count": 3,
+      "answer_options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "message_templates": {
+        "correct": "✅ 正确！答案是 {correct_answer}，继续加油！",
+        "wrong": "❌ 答案是 {correct_answer}，你选了 {student_answer}，来看看解析吧👇",
+        "no_answer": "✅ 已收到你的答案：{student_answer}（题目暂无标准答案）"
+      }
+    },
+    "jiangzhi": {
+      "open_id": "ou_xxx",
+      "name": "蒋智",
+      "subject": "AP化学",
+      "questions_file": "output/jiangzhi/questions.json"
+    }
+  },
+  "students": {
+    "ou_b331f3918e6e9135a4edb24976198248": {
+      "name": "（待填写）",
+      "bindings": [
+        {
+          "teacher_id": "chenxi",
+          "chat_id": "oc_4003a1795f471dc00f6b5c90fc43da8d",
+          "subject": "AP统计"
+        }
+      ],
+      "push_enabled": true
+    },
+    "ou_ef54461cdd57b75bd4b174e04032205d": {
+      "name": "聪",
+      "bindings": [
+        {
+          "chat_id": "oc_4003a1795f471dc00f6b5c90fc43da8d",
+          "subject": "AP统计",
+          "teacher_id": "chenxi"
+        }
+      ]
+    },
+    "ou_yyy": {
+      "name": "（待填写）",
+      "bindings": [
+        {
+          "teacher_id": "jiangzhi",
+          "chat_id": "oc_207139e6149fd6829e02367adc3cd0db",
+          "subject": "AP化学"
+        }
+      ]
+    }
+  }
+}

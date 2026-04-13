@@ -1,0 +1,27 @@
+{
+  "_comment": "Wenshu 定时任务参考文档。实际由系统 crontab 管理，与 OpenClaw 无关。",
+  "_crontab_entry": "*/10 * * * * AUTO_SEND_DIR=/project/Wenshu-main PYTHON3_BIN=/usr/bin/python3 /usr/bin/python3 /project/Wenshu-main/feishu_bot.py --mode teacher --target-id ou_ef54461cdd57b75bd4b174e04032205d --chat-id oc_4003a1795f471dc00f6b5c90fc43da8d >> /project/Wenshu-main/logs/cron_push.log 2>&1",
+  "_manage": "crontab -e  （查看/编辑）  |  crontab -l  （查看当前）",
+  "_log": "/project/Wenshu-main/logs/cron_push.log",
+  "jobs": [
+    {
+      "id": "f6a05524-429a-4468-b864-5aaefa25c24b",
+      "name": "虾仁题目推送",
+      "enabled": true,
+      "schedule": "*/10 * * * *",
+      "description": "每 10 分钟向虾仁推送 AP 统计题目",
+      "command": "/usr/bin/python3 /project/Wenshu-main/feishu_bot.py --mode teacher --target-id ou_ef54461cdd57b75bd4b174e04032205d --chat-id oc_4003a1795f471dc00f6b5c90fc43da8d",
+      "env": {
+        "AUTO_SEND_DIR": "/project/Wenshu-main",
+        "PYTHON3_BIN": "/usr/bin/python3"
+      },
+      "log": "/project/Wenshu-main/logs/cron_push.log"
+    }
+  ],
+  "_removed": [
+    "下班打卡提醒 — OpenClaw agentTurn 任务，与本项目无关",
+    "每日项目进展播报 — OpenClaw agentTurn 任务，与本项目无关",
+    "周四下午周报初版 — OpenClaw agentTurn 任务，与本项目无关",
+    "周五早上周报最终版 — OpenClaw agentTurn 任务，与本项目无关"
+  ]
+}

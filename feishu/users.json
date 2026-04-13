@@ -1,0 +1,16 @@
+{
+  "admin": {
+    "password_hash": "scrypt:32768:8:1$iMWbX1SwdPc01OlC$f35aeffe4c07d79de206f29cb84d88118d459decee8d0ce53deb723417ae11eba2673fe6b60baa526faf7dd83e5d6ab2aeb55466d83a0e9486ebd64dbe806895",
+    "role": "admin"
+  },
+  "chenxi": {
+    "password_hash": "scrypt:32768:8:1$ekMcdUdwBnyTojCT$7d68dc71d1d789cbf7a5cfe28fdc2f1a5472407fd1376f5d40eda15252a8d83ea44beec6cf730d7bf1320b659c9a29ccddd979b45811dc5af362565bff1182ce",
+    "role": "teacher",
+    "teacher_id": "chenxi"
+  },
+  "jiangzhi": {
+    "password_hash": "scrypt:32768:8:1$9hkdGsPmjq1EWxti$4e4a517dc9dbb8562745399820f72542ae834af457ca788c8f2cd20813c48e322da702fef5f50c7bb2255b5b98e202bdf983e6b1d08852e6f53c111a9d8aee96",
+    "role": "teacher",
+    "teacher_id": "jiangzhi"
+  }
+}
