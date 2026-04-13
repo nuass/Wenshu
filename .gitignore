@@ -23,6 +23,11 @@ students/*.json
 # Output images (large binary)
 output/*/images/
 
+# Runtime directories
+copurs/
+logs/
+output/
+
 # OS
 .DS_Store
 Thumbs.db
