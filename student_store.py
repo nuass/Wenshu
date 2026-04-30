@@ -18,6 +18,7 @@ student_store.py
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,13 @@ from config import STUDENTS_DIR, QUESTIONS_JSON as _questions_json_path, questio
 
 # 导出 questions_json 给外部模块使用
 __all__ = ["questions_json"]
+
+# 记忆摘要注入（非阻塞，ImportError 时降级）
+try:
+    from memory_store import get_memory_summary as _get_memory_summary
+    _MEMORY_ENABLED = True
+except ImportError:
+    _MEMORY_ENABLED = False
 
 # ── 学生画像 ──────────────────────────────────────────────────
 
@@ -65,11 +73,18 @@ def load_student(student_id: str, *, require_exists: bool = False) -> dict:
 
 
 def save_student(student: dict) -> None:
-    """持久化学生画像。student 须含 'student_id' 字段。"""
+    """持久化学生画像（原子写入，防并发损坏）。student 须含 'student_id' 字段。"""
     p = Path(STUDENTS_DIR) / f"{student['student_id']}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(student, f, ensure_ascii=False, indent=2)
+    data = json.dumps(student, ensure_ascii=False, indent=2)
+    # 先写临时文件，再原子 rename，防止 cron 并发读到半写文件
+    tmp = p.with_suffix(".tmp")
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 # ── 题库 ──────────────────────────────────────────────────────
@@ -133,12 +148,26 @@ def load_questions(teacher_id: str = "") -> dict[int, dict]:
 # ── 对话上下文 ────────────────────────────────────────────────
 
 def load_context(student_id: str) -> dict:
-    """读取学生的对话上下文（last_pushed_question_ids / recent_messages 等）。"""
+    """读取学生的对话上下文（last_pushed_question_ids / recent_messages 等）。
+    如果启用了记忆模块，自动附加学生历史记忆摘要（memory_summary 字段）。
+    """
     path = Path(STUDENTS_DIR) / f"{student_id}_context.json"
     if path.exists():
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+            ctx = json.load(f)
+    else:
+        ctx = {}
+
+    # 附加记忆摘要（供 intent_router / push_engine 使用）
+    if _MEMORY_ENABLED:
+        try:
+            summary = _get_memory_summary(student_id)
+            if summary:
+                ctx["memory_summary"] = summary
+        except Exception:
+            pass  # 记忆读取失败不阻断主流程
+
+    return ctx
 
 
 def save_context(
@@ -170,5 +199,11 @@ def save_context(
     ctx["recent_messages"] = recent[-10:]
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(ctx, f, ensure_ascii=False, indent=2)
+    data = json.dumps(ctx, ensure_ascii=False, indent=2)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise

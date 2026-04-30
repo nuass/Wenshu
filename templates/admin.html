@@ -182,7 +182,17 @@
                 </td>
                 <td class="px-4 py-3" x-text="s.current_difficulty ?? '—'"></td>
                 <td class="px-4 py-3" x-text="s.accuracy != null ? s.accuracy + '%' : '—'"></td>
-                <td class="px-4 py-3 flex gap-2 items-center">
+                <td class="px-4 py-3 flex gap-2 items-center flex-wrap">
+                  <!-- 任务 badge：被哪个 cron 推送 -->
+                  <template x-for="job in getStudentJobs(s)" :key="job.id">
+                    <button
+                      @click="page = 'cron'"
+                      :class="job.enabled ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-gray-100 text-gray-400 border-gray-200'"
+                      class="border rounded-full text-xs px-2 py-0.5 hover:opacity-80 transition-opacity"
+                      :title="'定时任务：' + job.name + (job.enabled ? ' (启用中)' : ' (已禁用)')"
+                      x-text="'⏰ ' + job.name">
+                    </button>
+                  </template>
                   <!-- 推题开关 -->
                   <button @click="togglePush(s)"
                     :class="s.push_enabled === false ? 'bg-gray-200 text-gray-500' : 'bg-green-100 text-green-700'"
@@ -192,6 +202,7 @@
                   </button>
                   <button @click="openStudentForm(s)" class="text-indigo-600 hover:underline">编辑</button>
                   <button @click="openPushModal(s)" class="text-indigo-400 hover:underline">推题</button>
+                  <button @click="openMemoryModal(s)" class="text-purple-500 hover:underline">📖 记忆</button>
                   <button @click="deleteStudent(s)" class="text-red-500 hover:underline">删除</button>
                 </td>
               </tr>
@@ -231,31 +242,270 @@
       </div>
     </div>
 
-    <!-- 推题任务 -->
-    <div x-show="page === 'cron'">
-      <h1 class="text-xl font-semibold mb-6">推题任务</h1>
-      <div class="grid gap-4">
-        <template x-for="job in cronJobs" :key="job.id">
-          <div class="bg-white rounded-xl border p-5">
-            <div class="flex items-start justify-between gap-4">
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="font-medium" x-text="job.name"></span>
-                  <span :class="job.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
-                    class="text-xs px-2 py-0.5 rounded-full"
-                    x-text="job.enabled ? '启用' : '禁用'"></span>
-                </div>
-                <div class="text-xs text-gray-400 mb-1" x-text="job.description"></div>
-                <div class="font-mono text-xs text-indigo-500" x-text="job.schedule?.expr || job.schedule?.description || ''"></div>
+    <!-- 作业管理 -->
+    <div x-show="page === 'assignments'">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">作业管理</h1>
+        <button @click="openAssignmentModal()"
+          class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">+ 布置作业</button>
+      </div>
+
+      <!-- 作业列表 -->
+      <div class="space-y-4">
+        <template x-for="a in assignments" :key="a.id">
+          <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+            <div class="flex items-start justify-between">
+              <div>
+                <h2 class="font-semibold text-gray-800" x-text="a.name"></h2>
+                <p class="text-xs text-gray-400 mt-0.5" x-text="a.description"></p>
               </div>
-              <button
-                @click="toggleCron(job)"
-                :class="job.enabled ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-indigo-300 text-indigo-600 hover:bg-indigo-50'"
-                class="shrink-0 border rounded-lg px-3 py-1.5 text-xs transition-colors"
-                x-text="job.enabled ? '禁用' : '启用'">
+              <div class="flex items-center gap-2">
+                <!-- 提醒按钮 -->
+                <button @click="remindAssignment(a.id)"
+                  class="text-xs px-3 py-1 rounded-lg border border-amber-400 text-amber-600 hover:bg-amber-50">提醒</button>
+                <!-- 删除 -->
+                <button @click="deleteAssignment(a.id, a.name)"
+                  class="text-xs px-3 py-1 rounded-lg border border-red-300 text-red-500 hover:bg-red-50">删除</button>
+              </div>
+            </div>
+
+            <!-- 元信息 -->
+            <div class="flex flex-wrap gap-3 mt-3 text-xs text-gray-500">
+              <span>📅 截止：<strong x-text="a.due_date"></strong></span>
+              <span x-show="a.chapter">📖 章节：<span x-text="a.chapter"></span></span>
+              <span x-show="a.difficulty">⭐ 难度：<span x-text="a.difficulty"></span></span>
+              <span x-show="a.question_ids && a.question_ids.length">📚 题目数：<span x-text="a.question_ids.length"></span></span>
+            </div>
+
+            <!-- 学生进度条 -->
+            <div class="mt-4">
+              <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                <span>学生完成进度</span>
+                <span>
+                  <span class="text-green-600 font-medium" x-text="a.completed"></span>/<span x-text="a.total_students"></span> 完成
+                  <span class="ml-2 text-amber-500" x-show="a.in_progress > 0">· <span x-text="a.in_progress"></span> 进行中</span>
+                  <span class="ml-2 text-red-400" x-show="a.overdue > 0">· <span x-text="a.overdue"></span> 已过期</span>
+                </span>
+              </div>
+              <div class="w-full bg-gray-100 rounded-full h-2">
+                <div class="bg-green-500 h-2 rounded-full transition-all"
+                  :style="`width: ${a.total_students > 0 ? Math.round(a.completed / a.total_students * 100) : 0}%`"></div>
+              </div>
+            </div>
+
+            <!-- 学生明细（展开） -->
+            <div class="mt-3">
+              <button @click="toggleAssignmentDetail(a.id)"
+                class="text-xs text-indigo-500 hover:underline">
+                <span x-text="assignmentExpanded[a.id] ? '收起详情 ▲' : '查看各学生进度 ▼'"></span>
               </button>
+              <div x-show="assignmentExpanded[a.id]" class="mt-3 space-y-1">
+                <template x-for="[sid, sa] in Object.entries(a.student_assignments || {})" :key="sid">
+                  <div class="flex items-center justify-between text-xs bg-gray-50 rounded px-3 py-1.5">
+                    <span class="text-gray-600" x-text="getStudentName(sid)"></span>
+                    <div class="flex items-center gap-3">
+                      <span x-show="sa.total > 0" class="text-gray-500">
+                        <span x-text="sa.progress"></span>/<span x-text="sa.total"></span> 题
+                      </span>
+                      <span class="px-2 py-0.5 rounded-full font-medium"
+                        :class="{
+                          'bg-green-100 text-green-700': sa.status === 'completed',
+                          'bg-blue-100 text-blue-700':  sa.status === 'in_progress',
+                          'bg-red-100 text-red-500':    sa.status === 'overdue',
+                          'bg-gray-100 text-gray-500':  sa.status === 'pending',
+                        }"
+                        x-text="{completed:'已完成', in_progress:'进行中', overdue:'已过期', pending:'未开始'}[sa.status] || sa.status">
+                      </span>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
+        </template>
+        <div x-show="assignments.length === 0" class="text-gray-400 text-center py-12">暂无作业，点击「布置作业」创建</div>
+      </div>
+    </div>
+
+    <!-- 推题任务 -->
+    <div x-show="page === 'cron'">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">推题任务</h1>
+        <button x-show="currentUser.role === 'admin'" @click="openCronJobModal()"
+          class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">+ 新建任务</button>
+      </div>
+      <div class="grid gap-4">
+        <template x-for="job in cronJobs" :key="job.id">
+
+          <div class="bg-white rounded-xl border overflow-hidden">
+
+            <!-- ── 卡片头部 ── -->
+            <div class="p-5">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="font-medium" x-text="job.name"></span>
+                    <span :class="job.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
+                      class="text-xs px-2 py-0.5 rounded-full"
+                      x-text="job.enabled ? '启用' : '禁用'"></span>
+                    <!-- 关联老师 badge -->
+                    <template x-if="getJobTeacher(job)">
+                      <span class="bg-indigo-50 text-indigo-600 text-xs px-2 py-0.5 rounded-full"
+                        x-text="getJobTeacher(job).name + ' · ' + getJobTeacher(job).subject">
+                      </span>
+                    </template>
+                    <!-- 题库状态 badge -->
+                    <template x-if="getJobTeacher(job)">
+                      <span
+                        :class="getJobTeacher(job).question_count < 20 ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-500'"
+                        class="text-xs px-2 py-0.5 rounded-full"
+                        x-text="'题库 ' + getJobTeacher(job).question_count + ' 题'">
+                      </span>
+                    </template>
+                    <!-- 推送学生数 badge -->
+                    <template x-if="getJobStudents(job).length > 0">
+                      <span class="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full"
+                        x-text="getJobStudents(job).length + ' 名学生'">
+                      </span>
+                    </template>
+                  </div>
+                  <div class="text-xs text-gray-400 mb-1" x-text="job.description"></div>
+                  <div class="font-mono text-xs text-indigo-500" x-text="job.schedule?.expr || job.schedule?.description || job.schedule || ''"></div>
+                </div>
+                <!-- 右侧按钮组 -->
+                <div class="flex items-center gap-2 shrink-0">
+                  <button
+                    @click="toggleCron(job)"
+                    :class="job.enabled ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-indigo-300 text-indigo-600 hover:bg-indigo-50'"
+                    class="border rounded-lg px-3 py-1.5 text-xs transition-colors"
+                    x-text="job.enabled ? '禁用' : '启用'">
+                  </button>
+                  <!-- 参数展开按钮 -->
+                  <button
+                    @click="toggleCronExpand(job)"
+                    :class="cronExpanded[job.id] ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'border-gray-200 text-gray-500 hover:bg-gray-50'"
+                    class="border rounded-lg px-3 py-1.5 text-xs transition-colors flex items-center gap-1">
+                    <span>参数</span>
+                    <svg :class="cronExpanded[job.id] ? 'rotate-180' : ''"
+                      class="w-3 h-3 transition-transform" fill="none" viewBox="0 0 24 24"
+                      stroke="currentColor" stroke-width="2.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                  <!-- 删除按钮（admin only） -->
+                  <button x-show="currentUser.role === 'admin'"
+                    @click="deleteCronJob(job)"
+                    class="border border-red-200 text-red-400 hover:bg-red-50 rounded-lg px-3 py-1.5 text-xs transition-colors">
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── 展开参数配置区 ── -->
+            <div x-show="cronExpanded[job.id]" class="border-t bg-gray-50 px-5 py-4">
+
+              <!-- 未关联老师警告 -->
+              <template x-if="!getJobTeacher(job)">
+                <div class="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs">
+                  <span>⚠️</span>
+                  <span>此任务未设置 <code class="bg-amber-100 px-1 rounded font-mono">teacher_id</code>，无法加载参数。</span>
+                </div>
+              </template>
+
+              <!-- 已关联老师：参数编辑表单 -->
+              <template x-if="getJobTeacher(job)">
+                <div>
+                  <div class="flex items-center gap-1.5 mb-4 text-xs text-gray-500">
+                    <span>👩‍🏫</span>
+                    关联老师：<strong x-text="getJobTeacher(job).name"></strong>
+                    （<span x-text="getJobTeacher(job).subject"></span>）
+                    — 题库 <span class="font-medium text-gray-700" x-text="getJobTeacher(job).question_count + ' 题'"></span>
+                  </div>
+
+                  <!-- 推送对象学生列表（可编辑） -->
+                  <div class="mb-4">
+                    <div class="text-xs font-medium text-gray-500 mb-2">👤 推送对象
+                      <span class="font-normal text-gray-400 ml-1">（勾选后点「保存参数」生效）</span>
+                    </div>
+                    <template x-if="getTeacherStudents(job).length === 0">
+                      <div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        ⚠️ 该老师暂无绑定学生
+                      </div>
+                    </template>
+                    <div class="flex flex-wrap gap-2">
+                      <template x-for="stu in getTeacherStudents(job)" :key="stu.student_id">
+                        <label class="flex items-center gap-2 bg-white border rounded-lg px-3 py-2 text-xs cursor-pointer select-none"
+                          :class="(cronDraft[job.id]?.student_ids || []).includes(stu.student_id)
+                            ? 'border-indigo-300 bg-indigo-50'
+                            : 'border-gray-200 hover:border-gray-300'">
+                          <input type="checkbox"
+                            :checked="(cronDraft[job.id]?.student_ids || []).includes(stu.student_id)"
+                            @change="toggleStudentInDraft(job.id, stu.student_id, $event.target.checked)"
+                            class="accent-indigo-600">
+                          <span class="font-medium text-gray-800" x-text="stu.name"></span>
+                          <span class="text-gray-400">·</span>
+                          <span class="text-gray-500">难度 <span class="font-medium text-gray-700" x-text="stu.current_difficulty ?? '—'"></span></span>
+                          <span class="text-gray-400">·</span>
+                          <span class="text-gray-500">正确率 <span
+                            :class="stu.accuracy == null ? 'text-gray-400' : stu.accuracy >= 70 ? 'text-green-600 font-medium' : stu.accuracy >= 50 ? 'text-yellow-600 font-medium' : 'text-red-600 font-medium'"
+                            x-text="stu.accuracy != null ? stu.accuracy + '%' : '—'"></span></span>
+                          <span :class="stu.push_enabled === false ? 'bg-gray-100 text-gray-400' : 'bg-green-100 text-green-700'"
+                            class="px-1.5 py-0.5 rounded-full"
+                            x-text="stu.push_enabled === false ? '已暂停' : '推题中'"></span>
+                        </label>
+                      </template>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+                    <!-- push_count 可编辑 -->
+                    <div>
+                      <label class="block text-xs font-medium text-gray-600 mb-1">每次推题数</label>
+                      <input
+                        :value="cronDraft[job.id]?.push_count"
+                        @input="cronDraft = { ...cronDraft, [job.id]: { ...cronDraft[job.id], push_count: Number($event.target.value) } }"
+                        type="number" min="1" max="20"
+                        class="w-full border rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                      <p class="text-xs text-gray-400 mt-1">每次 cron 触发时推送的题目数</p>
+                    </div>
+
+                    <!-- dedup_days 可编辑 -->
+                    <div>
+                      <label class="block text-xs font-medium text-gray-600 mb-1">去重天数窗口</label>
+                      <input
+                        :value="cronDraft[job.id]?.dedup_days"
+                        @input="cronDraft = { ...cronDraft, [job.id]: { ...cronDraft[job.id], dedup_days: Number($event.target.value) } }"
+                        type="number" min="0" max="365"
+                        class="w-full border rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                      <p class="text-xs text-gray-400 mt-1">同一题 N 天内不重复推，0 = 不去重</p>
+                    </div>
+
+                  </div>
+
+                  <!-- 保存行 -->
+                  <div class="flex items-center gap-3 mt-4 pt-4 border-t border-gray-200">
+                    <button
+                      @click="saveCronJobParams(job)"
+                      :disabled="cronSaving[job.id]"
+                      class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5">
+                      <svg x-show="cronSaving[job.id]" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                      </svg>
+                      <span x-text="cronSaving[job.id] ? '保存中…' : '保存参数'"></span>
+                    </button>
+                    <span x-show="cronSaved[job.id]" class="text-green-600 text-sm">✓ 已保存</span>
+                    <span x-show="cronError[job.id]" class="text-red-500 text-xs" x-text="cronError[job.id]"></span>
+                  </div>
+
+                </div>
+              </template>
+
+            </div><!-- /展开区 -->
+
+          </div><!-- /卡片 -->
         </template>
         <div x-show="cronJobs.length === 0" class="text-gray-400 text-center py-12">暂无任务数据</div>
       </div>
@@ -265,46 +515,26 @@
     <div x-show="page === 'settings'">
       <h1 class="text-xl font-semibold mb-6">系统设置</h1>
 
-      <!-- 推题频率 -->
+      <!-- 选题算法阈值 -->
       <div class="bg-white rounded-xl border p-6 mb-5">
-        <h2 class="font-semibold mb-1">推题频率</h2>
-        <p class="text-xs text-gray-400 mb-4">控制系统 cron 自动推题的间隔时间</p>
-        <div class="flex items-center gap-3">
-          <label class="text-sm text-gray-600 w-32">每隔（分钟）</label>
-          <input x-model.number="pushInterval" type="number" min="1" max="1440"
-            class="border rounded-lg px-3 py-2 w-28 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-          <button @click="savePushInterval()"
-            class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700">保存</button>
-          <span x-show="pushIntervalSaved" class="text-green-600 text-sm">✓ 已保存</span>
-        </div>
-      </div>
-
-      <!-- 全局参数 -->
-      <div class="bg-white rounded-xl border p-6">
-        <h2 class="font-semibold mb-1">全局推题参数</h2>
-        <p class="text-xs text-gray-400 mb-5">修改后立即生效，影响所有老师和学生</p>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <h2 class="font-semibold mb-1">选题算法参数</h2>
+        <p class="text-xs text-gray-400 mb-5">控制系统如何判断薄弱点、何时升降难度，修改后立即对所有任务生效</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">去重天数窗口（dedup_days）</label>
-            <p class="text-xs text-gray-400 mb-1.5">同一题在此天数内不重复推送，0 = 不去重</p>
-            <input x-model.number="settings.dedup_days" type="number" min="0"
-              class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">薄弱点判定阈值（mastery_threshold）</label>
+            <label class="block text-xs text-gray-500 mb-1">薄弱点判定阈值</label>
             <p class="text-xs text-gray-400 mb-1.5">知识点正确率低于此值视为薄弱，范围 0–1</p>
             <input x-model.number="settings.mastery_threshold" type="number" min="0.01" max="0.99" step="0.05"
               class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">难度提升阈值（difficulty_up_threshold）</label>
-            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 ≥ 此值则提升难度，范围 0–1</p>
+            <label class="block text-xs text-gray-500 mb-1">难度提升阈值</label>
+            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 ≥ 此值则提升难度</p>
             <input x-model.number="settings.difficulty_up_threshold" type="number" min="0.01" max="0.99" step="0.05"
               class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">难度降低阈值（difficulty_down_threshold）</label>
-            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 &lt; 此值则降低难度，范围 0–1</p>
+            <label class="block text-xs text-gray-500 mb-1">难度降低阈值</label>
+            <p class="text-xs text-gray-400 mb-1.5">近 10 题正确率 &lt; 此值则降低难度</p>
             <input x-model.number="settings.difficulty_down_threshold" type="number" min="0.01" max="0.99" step="0.05"
               class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
           </div>
@@ -312,7 +542,7 @@
         <div x-show="settingsError" class="mt-4 text-red-500 text-xs" x-text="settingsError"></div>
         <div class="flex items-center gap-3 mt-5">
           <button @click="saveSettings()"
-            class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700">保存全局参数</button>
+            class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700">保存</button>
           <span x-show="settingsSaved" class="text-green-600 text-sm">✓ 已保存</span>
         </div>
       </div>
@@ -673,19 +903,6 @@
         <label class="block text-xs text-gray-500 mb-1">飞书 open_id</label>
         <input x-model="teacherModal.form.open_id" class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" placeholder="ou_xxx">
       </div>
-      <div x-show="teacherModal.isEdit" class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">每次推题数（push_count）</label>
-          <input x-model.number="teacherModal.form.push_count" type="number" min="1" max="20"
-            class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">答题选项（逗号分隔）</label>
-          <input x-model="teacherModal.form.answer_options"
-            class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            placeholder="A,B,C,D">
-        </div>
-      </div>
       <div x-show="teacherModal.isEdit">
         <div class="text-xs text-gray-500 mb-2 font-medium">答题反馈消息模板
           <span class="font-normal text-gray-400 ml-1">支持变量：{correct_answer} {student_answer} {student_name}</span>
@@ -823,6 +1040,275 @@
   </div>
 </div>
 
+<!-- 学习记忆弹窗 -->
+<div x-show="memoryModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">📖 学习记忆
+        <span class="text-sm font-normal text-gray-400 ml-2" x-text="memoryModal.studentName"></span>
+      </h2>
+      <button @click="memoryModal.open = false" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+    </div>
+
+    <!-- Tab 切换 -->
+    <div class="flex border-b mb-4 text-sm">
+      <template x-for="tab in [
+        {key:'teaching_feedback', label:'💡 教学反馈'},
+        {key:'learning_progress', label:'📈 学习进展'},
+        {key:'student_profile',   label:'📋 学生画像'}
+      ]" :key="tab.key">
+        <button
+          @click="memoryModal.activeTab = tab.key; loadMemoryTab()"
+          :class="memoryModal.activeTab === tab.key
+            ? 'border-b-2 border-indigo-500 text-indigo-600 font-medium'
+            : 'text-gray-500 hover:text-gray-700'"
+          class="px-4 py-2 -mb-px"
+          x-text="tab.label">
+        </button>
+      </template>
+    </div>
+
+    <!-- 加载中 -->
+    <div x-show="memoryModal.loading" class="py-10 text-center text-gray-400 text-sm">加载中…</div>
+
+    <!-- 内容编辑区 -->
+    <div x-show="!memoryModal.loading">
+      <!-- 无记忆提示 -->
+      <div x-show="!memoryModal.content && !memoryModal.editing"
+        class="py-8 text-center text-gray-400">
+        <div class="text-3xl mb-2">🗒️</div>
+        <div class="text-sm">暂无记忆，点击「新建」开始记录</div>
+      </div>
+
+      <!-- 查看模式 -->
+      <div x-show="memoryModal.content && !memoryModal.editing">
+        <!-- meta 信息条 -->
+        <div class="flex items-center gap-3 mb-3 text-xs text-gray-400">
+          <span x-text="'更新于 ' + (memoryModal.meta.updated_at || '—')"></span>
+          <span x-show="memoryModal.meta.consolidated === 'true'"
+            class="bg-purple-50 text-purple-600 px-2 py-0.5 rounded-full">已精选整合</span>
+        </div>
+        <!-- Markdown 内容（预格式显示） -->
+        <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto border"
+          x-text="memoryModal.content"></div>
+
+        <!-- 追加反馈（仅教学反馈 tab） -->
+        <div x-show="memoryModal.activeTab === 'teaching_feedback'" class="mt-4">
+          <label class="block text-xs text-gray-500 mb-1">追加新洞察</label>
+          <textarea x-model="memoryModal.appendText" rows="3"
+            class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-300"
+            placeholder="如：学生连续 3 次在假设检验 p-value 上出错，建议回归难度 3…"></textarea>
+          <button @click="appendMemoryFeedback()"
+            :disabled="!memoryModal.appendText.trim() || memoryModal.saving"
+            class="mt-2 px-3 py-1.5 bg-purple-600 text-white text-xs rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            x-text="memoryModal.saving ? '保存中…' : '追加记录'">
+          </button>
+        </div>
+      </div>
+
+      <!-- 编辑模式 -->
+      <div x-show="memoryModal.editing">
+        <textarea x-model="memoryModal.editText" rows="14"
+          class="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-300 leading-relaxed"
+          placeholder="支持 Markdown 格式…"></textarea>
+      </div>
+    </div>
+
+    <!-- 错误提示 -->
+    <div x-show="memoryModal.error" class="mt-3 text-red-500 text-xs" x-text="memoryModal.error"></div>
+
+    <!-- 底部按钮 -->
+    <div class="flex justify-between items-center mt-5">
+      <!-- 左侧：LLM 整合按钮 -->
+      <button
+        x-show="memoryModal.content && !memoryModal.editing"
+        @click="consolidateMemory()"
+        :disabled="memoryModal.saving"
+        class="px-3 py-1.5 text-xs border rounded-lg text-purple-600 border-purple-200 hover:bg-purple-50 disabled:opacity-50"
+        x-text="memoryModal.saving ? '整合中…' : '✨ LLM 精选整合'">
+      </button>
+      <div x-show="!memoryModal.content && !memoryModal.editing" class="flex-1"></div>
+
+      <!-- 右侧：操作按钮 -->
+      <div class="flex gap-3">
+        <template x-if="!memoryModal.editing">
+          <div class="flex gap-2">
+            <button @click="memoryModal.open = false"
+              class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">关闭</button>
+            <button @click="startEditMemory()"
+              class="px-4 py-2 rounded-lg bg-purple-600 text-white text-sm hover:bg-purple-700"
+              x-text="memoryModal.content ? '✏️ 编辑' : '+ 新建'">
+            </button>
+          </div>
+        </template>
+        <template x-if="memoryModal.editing">
+          <div class="flex gap-2">
+            <button @click="cancelEditMemory()"
+              class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">取消</button>
+            <button @click="saveMemory()" :disabled="memoryModal.saving"
+              class="px-4 py-2 rounded-lg bg-purple-600 text-white text-sm hover:bg-purple-700 disabled:opacity-50"
+              x-text="memoryModal.saving ? '保存中…' : '保存'">
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 新建作业弹窗 -->
+<div x-show="assignmentModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="assignmentModal.open=false">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-7">
+    <h2 class="text-lg font-semibold mb-5">布置新作业</h2>
+    <div class="space-y-4">
+      <!-- 作业名称 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">作业名称 <span class="text-red-400">*</span></label>
+        <input x-model="assignmentModal.form.name" type="text" placeholder="例：五一假期练习" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <!-- 截止日期 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">截止日期 <span class="text-red-400">*</span></label>
+        <input x-model="assignmentModal.form.due_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <!-- 说明 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">作业说明（可选）</label>
+        <textarea x-model="assignmentModal.form.description" rows="2" placeholder="例：第5-7章综合练习" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"></textarea>
+      </div>
+      <!-- 题目过滤 -->
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">按章节过滤（可选）</label>
+          <input x-model="assignmentModal.form.chapter" type="text" placeholder="例：第5章" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">难度过滤（1-5，可选）</label>
+          <input x-model="assignmentModal.form.difficulty" type="number" min="1" max="5" placeholder="留空不限" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+        </div>
+      </div>
+      <!-- 指定题目 ID -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">指定题目 ID（逗号分隔，优先于章节过滤）</label>
+        <input x-model="assignmentModal.form.question_ids" type="text" placeholder="例：101,102,103" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+      <!-- 错误提示 -->
+      <p x-show="assignmentModal.error" class="text-red-500 text-xs" x-text="assignmentModal.error"></p>
+    </div>
+    <div class="flex justify-end gap-3 mt-6">
+      <button @click="assignmentModal.open=false" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">取消</button>
+      <button @click="createAssignment()" :disabled="assignmentModal.saving"
+        class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
+        x-text="assignmentModal.saving ? '创建中…' : '创建并通知学生'"></button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建推题任务弹窗 -->
+<div x-show="cronJobModal.open" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+    <h2 class="text-lg font-semibold mb-5">新建推题任务</h2>
+    <div class="space-y-4">
+
+      <!-- 任务名称 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">任务名称</label>
+        <input x-model="cronJobModal.form.name"
+          class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          placeholder="如：虾仁每日推题">
+      </div>
+
+      <!-- 关联老师 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">关联老师</label>
+        <select x-model="cronJobModal.form.teacher_id"
+          @change="cronJobModal.form.student_ids = []"
+          class="w-full border rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+          <option value="">选择老师</option>
+          <template x-for="t in teachers" :key="t.id">
+            <option :value="t.id" x-text="t.name + '（' + t.subject + '，题库 ' + t.question_count + ' 题）'"></option>
+          </template>
+        </select>
+      </div>
+
+      <!-- 推送学生（根据老师过滤） -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">推送学生
+          <span class="text-gray-400 font-normal ml-1">（可多选）</span>
+        </label>
+        <template x-if="!cronJobModal.form.teacher_id">
+          <div class="text-xs text-gray-400 border rounded-lg px-3 py-2">请先选择老师</div>
+        </template>
+        <template x-if="cronJobModal.form.teacher_id">
+          <div>
+            <template x-if="getModalTeacherStudents().length === 0">
+              <div class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                该老师暂无绑定学生，请先在「学生管理」中添加绑定关系
+              </div>
+            </template>
+            <div class="flex flex-wrap gap-2">
+              <template x-for="stu in getModalTeacherStudents()" :key="stu.student_id">
+                <label class="flex items-center gap-2 border rounded-lg px-3 py-2 text-xs cursor-pointer select-none"
+                  :class="cronJobModal.form.student_ids.includes(stu.student_id)
+                    ? 'border-indigo-300 bg-indigo-50'
+                    : 'border-gray-200 hover:border-gray-300'">
+                  <input type="checkbox"
+                    :checked="cronJobModal.form.student_ids.includes(stu.student_id)"
+                    @change="toggleModalStudent(stu.student_id, $event.target.checked)"
+                    class="accent-indigo-600">
+                  <span class="font-medium" x-text="stu.name"></span>
+                  <span class="text-gray-400" x-text="'难度' + (stu.current_difficulty ?? '—')"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 推题频率 -->
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">推题间隔（分钟）</label>
+          <input x-model.number="cronJobModal.form.interval_minutes" type="number" min="1" max="1440"
+            @input="cronJobModal.form.schedule = '*/'+cronJobModal.form.interval_minutes+' * * * *'"
+            class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            placeholder="10">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Cron 表达式（自动生成）</label>
+          <input x-model="cronJobModal.form.schedule"
+            class="w-full border rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            placeholder="*/10 * * * *">
+        </div>
+      </div>
+
+      <!-- 每次推题数 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">每次推题数</label>
+        <input x-model.number="cronJobModal.form.push_count" type="number" min="1" max="20"
+          class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+      </div>
+
+      <!-- 任务描述 -->
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">描述（可选）</label>
+        <input x-model="cronJobModal.form.description"
+          class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          placeholder="如：每 10 分钟向虾仁推送 AP 统计题目">
+      </div>
+
+    </div>
+    <div x-show="cronJobModal.error" class="mt-3 text-red-500 text-xs" x-text="cronJobModal.error"></div>
+    <div class="flex justify-end gap-3 mt-6">
+      <button @click="cronJobModal.open = false" class="px-4 py-2 rounded-lg border text-sm hover:bg-gray-50">取消</button>
+      <button @click="saveCronJob()" :disabled="cronJobModal.saving"
+        class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50"
+        x-text="cronJobModal.saving ? '创建中…' : '创建任务'">
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
 function app() {
   return {
@@ -832,7 +1318,8 @@ function app() {
       { id: 'teachers',  icon: '👩‍🏫', label: '老师管理' },
       { id: 'students',  icon: '👨‍🎓', label: '学生管理' },
       { id: 'chats',     icon: '💬', label: '飞书群' },
-      { id: 'cron',      icon: '⏰', label: '推题任务' },
+      { id: 'cron',        icon: '⏰', label: '推题任务' },
+      { id: 'assignments', icon: '📋', label: '作业管理' },
       { id: 'questions', icon: '📚', label: '题库管理' },
       { id: 'logs',      icon: '📜', label: '日志' },
       { id: 'settings',  icon: '⚙️', label: '系统设置' },
@@ -841,14 +1328,23 @@ function app() {
     students: [],
     chats: [],
     cronJobs: [],
+    cronExpanded: {},
+    cronDraft:    {},
+    cronSaving:   {},
+    cronSaved:    {},
+    cronError:    {},
+    cronJobModal: { open: false, form: {}, saving: false, error: '' },
+
+    // 作业管理
+    assignments: [],
+    assignmentExpanded: {},
+    assignmentModal: { open: false, form: {}, saving: false, error: '' },
     studentSearch: '',
     currentUser: { username: '', role: '', teacher_id: '' },
     stats: { teacherCount: 0, studentCount: 0, unnamedCount: 0, chatCount: 0, totalQuestions: 0 },
-    settings: { dedup_days: 7, mastery_threshold: 0.6, difficulty_up_threshold: 0.8, difficulty_down_threshold: 0.5 },
+    settings: { mastery_threshold: 0.6, difficulty_up_threshold: 0.8, difficulty_down_threshold: 0.5 },
     settingsSaved: false,
     settingsError: '',
-    pushInterval: null,
-    pushIntervalSaved: false,
     larkAuth: null,
     logs: [],
     logType: 'push',
@@ -863,11 +1359,17 @@ function app() {
     studentModal: { open: false, isEdit: false, form: {}, error: '' },
     confirm: { open: false, title: '', message: '', action: () => {} },
     pushModal: { open: false, studentId: '', studentName: '', form: { chapter: '', difficulty: '', question_ids: '' }, result: '', loading: false },
+    memoryModal: {
+      open: false, studentId: '', studentName: '',
+      activeTab: 'teaching_feedback',
+      content: '', meta: {}, editing: false, editText: '',
+      appendText: '', loading: false, saving: false, error: '',
+    },
 
     async init() {
       const me = await fetch('/api/me').then(r => r.json());
       this.currentUser = me;
-      await Promise.all([this.loadTeachers(), this.loadStudents(), this.loadChats(), this.loadCron(), this.loadSettings()]);
+      await Promise.all([this.loadTeachers(), this.loadStudents(), this.loadChats(), this.loadCron(), this.loadSettings(), this.loadAssignments()]);
       this.computeStats();
     },
 
@@ -893,18 +1395,75 @@ function app() {
       const r = await fetch('/api/cron').then(r => r.json());
       this.cronJobs = r;
     },
+
+    // ── 作业管理 ──────────────────────────────────────────────
+    async loadAssignments() {
+      const r = await fetch('/api/assignments').then(r => r.json()).catch(() => []);
+      this.assignments = Array.isArray(r) ? r : [];
+    },
+
+    toggleAssignmentDetail(id) {
+      this.assignmentExpanded[id] = !this.assignmentExpanded[id];
+    },
+
+    getStudentName(sid) {
+      const s = this.students.find(s => s.student_id === sid);
+      return s ? (s.name || sid) : sid;
+    },
+
+    openAssignmentModal() {
+      this.assignmentModal = {
+        open: true, saving: false, error: '',
+        form: { name: '', due_date: '', description: '', chapter: '', difficulty: '', question_ids: '' },
+      };
+    },
+
+    async createAssignment() {
+      const f = this.assignmentModal.form;
+      if (!f.name.trim()) { this.assignmentModal.error = '请填写作业名称'; return; }
+      if (!f.due_date)    { this.assignmentModal.error = '请设置截止日期'; return; }
+      this.assignmentModal.saving = true;
+      this.assignmentModal.error = '';
+      const body = {
+        name: f.name.trim(),
+        due_date: f.due_date,
+        description: f.description.trim(),
+        chapter: f.chapter.trim() || undefined,
+        difficulty: f.difficulty ? parseInt(f.difficulty) : undefined,
+        question_ids: f.question_ids
+          ? f.question_ids.split(/[,\s]+/).map(s => parseInt(s)).filter(n => !isNaN(n))
+          : [],
+      };
+      const r = await fetch('/api/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json()).catch(e => ({ error: String(e) }));
+      this.assignmentModal.saving = false;
+      if (r.error) { this.assignmentModal.error = r.error; return; }
+      this.assignmentModal.open = false;
+      await this.loadAssignments();
+    },
+
+    async deleteAssignment(id, name) {
+      if (!confirm(`确认删除作业「${name}」？此操作不可恢复。`)) return;
+      await fetch(`/api/assignments/${id}`, { method: 'DELETE' });
+      await this.loadAssignments();
+    },
+
+    async remindAssignment(id) {
+      const r = await fetch(`/api/assignments/${id}/remind`, { method: 'POST' })
+        .then(r => r.json()).catch(() => ({}));
+      alert(`已向 ${r.reminded ?? 0} 位未完成学生发送提醒`);
+    },
+
     async loadSettings() {
-      const [cfg, interval] = await Promise.all([
-        fetch('/api/config').then(r => r.json()),
-        fetch('/api/cron/push-interval').then(r => r.json()),
-      ]);
-      if (cfg.dedup_days !== undefined) {
-        this.settings.dedup_days = cfg.dedup_days;
-        this.settings.mastery_threshold = cfg.mastery_threshold;
+      const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
+      if (cfg.mastery_threshold !== undefined) {
+        this.settings.mastery_threshold       = cfg.mastery_threshold;
         this.settings.difficulty_up_threshold = cfg.difficulty_up_threshold;
         this.settings.difficulty_down_threshold = cfg.difficulty_down_threshold;
       }
-      this.pushInterval = interval.minutes ?? 10;
     },
     async saveSettings() {
       this.settingsError = '';
@@ -917,19 +1476,114 @@ function app() {
       this.settingsSaved = true;
       setTimeout(() => this.settingsSaved = false, 2000);
     },
-    async savePushInterval() {
-      const r = await fetch('/api/cron/push-interval', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minutes: Number(this.pushInterval) }),
-      }).then(r => r.json());
-      if (r.error) { this.settingsError = r.error; return; }
-      this.pushIntervalSaved = true;
-      setTimeout(() => this.pushIntervalSaved = false, 2000);
-    },
     async toggleCron(job) {
       const r = await fetch(`/api/cron/${job.id}/toggle`, { method: 'POST' }).then(r => r.json());
       if (r.ok) job.enabled = r.enabled;
+    },
+
+    getJobTeacher(job) {
+      if (!job.teacher_id) return null;
+      return this.teachers.find(t => t.id === job.teacher_id) ?? null;
+    },
+
+    // 从 job.command 解析 --target-id，返回匹配的学生对象数组（兼容旧数据）
+    getJobStudents(job) {
+      const ids = job.student_ids?.length
+        ? job.student_ids
+        : [...(job.command || '').matchAll(/--target-id\s+(\S+)/g)].map(m => m[1]);
+      return ids.map(id => this.students.find(s => s.student_id === id)).filter(Boolean);
+    },
+
+    // 返回该 job 关联老师下的所有学生（供编辑时多选）
+    getTeacherStudents(job) {
+      const teacher = this.getJobTeacher(job);
+      if (!teacher) return [];
+      return this.students.filter(s =>
+        (s.bindings || []).some(b => b.teacher_id === teacher.id)
+      );
+    },
+
+    // 切换 draft 中某学生的勾选状态
+    toggleStudentInDraft(jobId, studentId, checked) {
+      const draft = this.cronDraft[jobId] || {};
+      const ids = [...(draft.student_ids || [])];
+      if (checked && !ids.includes(studentId)) ids.push(studentId);
+      if (!checked) ids.splice(ids.indexOf(studentId), 1);
+      this.cronDraft = { ...this.cronDraft, [jobId]: { ...draft, student_ids: ids } };
+    },
+
+    // 反查：该学生被哪些 cron job 推送
+    getStudentJobs(student) {
+      return this.cronJobs.filter(j => {
+        const ids = j.student_ids?.length
+          ? j.student_ids
+          : [...(j.command || '').matchAll(/--target-id\s+(\S+)/g)].map(m => m[1]);
+        return ids.includes(student.student_id);
+      });
+    },
+    toggleCronExpand(job) {
+      const t = this.getJobTeacher(job);
+      const studentIds = job.student_ids?.length
+        ? [...job.student_ids]
+        : this.getJobStudents(job).map(s => s.student_id);
+      this.cronDraft    = { ...this.cronDraft,    [job.id]: { push_count: t?.push_count ?? 3, dedup_days: t?.dedup_days ?? 7, student_ids: studentIds } };
+      this.cronExpanded = { ...this.cronExpanded, [job.id]: !this.cronExpanded[job.id] };
+      this.cronSaving   = { ...this.cronSaving,   [job.id]: false };
+      this.cronSaved    = { ...this.cronSaved,     [job.id]: false };
+      this.cronError    = { ...this.cronError,     [job.id]: '' };
+    },
+    async saveCronJobParams(job) {
+      // 立即固定 id，避免 Alpine.js 异步后 job 引用失效
+      const jobId   = job.id;
+      const teacher = this.getJobTeacher(job);
+      if (!teacher) {
+        this.cronError = { ...this.cronError, [jobId]: '未关联老师，无法保存' };
+        return;
+      }
+      this.cronSaving = { ...this.cronSaving, [jobId]: true };
+      this.cronError  = { ...this.cronError,  [jobId]: '' };
+      const draft     = this.cronDraft[jobId] || {};
+      const teacherId = teacher.id;
+
+      try {
+        // 并行：保存老师参数 + 保存 student_ids
+        const [r1, r2] = await Promise.all([
+          fetch(`/api/teachers/${teacherId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ push_count: Number(draft.push_count), dedup_days: Number(draft.dedup_days) }),
+          }).then(r => r.json()),
+          fetch(`/api/cron/${jobId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_ids: draft.student_ids || [] }),
+          }).then(r => r.json()),
+        ]);
+
+        const err = r1.error || r2.error;
+        if (err) {
+          this.cronError = { ...this.cronError, [jobId]: err };
+          return;
+        }
+
+        // 更新本地缓存
+        const t = this.teachers.find(t => t.id === teacherId);
+        if (t) {
+          t.push_count = Number(draft.push_count);
+          t.dedup_days = Number(draft.dedup_days);
+        }
+        const j = this.cronJobs.find(j => j.id === jobId);
+        if (j && r2.job) {
+          j.student_ids = r2.job.student_ids;
+          j.command     = r2.job.command;
+        }
+        this.cronSaved = { ...this.cronSaved, [jobId]: true };
+        setTimeout(() => { this.cronSaved = { ...this.cronSaved, [jobId]: false }; }, 2000);
+      } catch (e) {
+        this.cronError = { ...this.cronError, [jobId]: '网络错误：' + (e.message || e) };
+      } finally {
+        this.cronSaving = { ...this.cronSaving, [jobId]: false };
+      }
     },
 
     computeStats() {
@@ -955,10 +1609,8 @@ function app() {
       this.teacherModal.error = '';
       this.teacherModal.form = t
         ? { id: t.id, name: t.name, subject: t.subject, open_id: t.open_id,
-            push_count: t.push_count ?? 3,
-            answer_options: (t.answer_options || ['A','B','C','D']).join(','),
             tpl_correct: '', tpl_wrong: '', tpl_no_answer: '' }
-        : { id: '', name: '', subject: '', open_id: '', push_count: 3, answer_options: 'A,B,C,D',
+        : { id: '', name: '', subject: '', open_id: '',
             tpl_correct: '', tpl_wrong: '', tpl_no_answer: '' };
       if (t) {
         fetch(`/api/teachers/${t.id}/templates`).then(r => r.json()).then(tpl => {
@@ -971,14 +1623,12 @@ function app() {
     },
     async saveTeacher() {
       const f = this.teacherModal.form;
-      const opts = f.answer_options.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
       let res;
       if (this.teacherModal.isEdit) {
         res = await fetch(`/api/teachers/${f.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: f.name, subject: f.subject, open_id: f.open_id,
-                                 push_count: Number(f.push_count), answer_options: opts }),
+          body: JSON.stringify({ name: f.name, subject: f.subject, open_id: f.open_id }),
         }).then(r => r.json());
         if (!res.error && (f.tpl_correct || f.tpl_wrong || f.tpl_no_answer)) {
           await fetch(`/api/teachers/${f.id}/templates`, {
@@ -1078,6 +1728,111 @@ function app() {
       this.pushModal = { open: true, studentId: s.student_id, studentName: s.name,
                          form: { chapter: '', difficulty: '', question_ids: '' }, result: '', loading: false };
     },
+    // ── 学习记忆 ──
+    async openMemoryModal(s) {
+      this.memoryModal = {
+        open: true, studentId: s.student_id, studentName: s.name,
+        activeTab: 'teaching_feedback',
+        content: '', meta: {}, editing: false, editText: '',
+        appendText: '', loading: false, saving: false, error: '',
+      };
+      await this.loadMemoryTab();
+    },
+    async loadMemoryTab() {
+      this.memoryModal.loading = true;
+      this.memoryModal.content = '';
+      this.memoryModal.meta = {};
+      this.memoryModal.editing = false;
+      this.memoryModal.error = '';
+      try {
+        const r = await fetch(`/api/memory/${this.memoryModal.studentId}`).then(r => r.json());
+        const mem = (r.memories || []).find(m => m.type === this.memoryModal.activeTab);
+        if (mem) {
+          this.memoryModal.content = mem.content;
+          this.memoryModal.meta = mem.meta || {};
+        }
+      } catch(e) {
+        this.memoryModal.error = '加载失败：' + e.message;
+      } finally {
+        this.memoryModal.loading = false;
+      }
+    },
+    startEditMemory() {
+      this.memoryModal.editText = this.memoryModal.content || '';
+      this.memoryModal.editing = true;
+    },
+    cancelEditMemory() {
+      this.memoryModal.editing = false;
+      this.memoryModal.editText = '';
+    },
+    async saveMemory() {
+      this.memoryModal.saving = true;
+      this.memoryModal.error = '';
+      try {
+        const r = await fetch(
+          `/api/memory/${this.memoryModal.studentId}/${this.memoryModal.activeTab}`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: this.memoryModal.editText,
+              student_name: this.memoryModal.studentName,
+            }),
+          }
+        ).then(r => r.json());
+        if (r.error) { this.memoryModal.error = r.error; return; }
+        this.memoryModal.content = this.memoryModal.editText;
+        this.memoryModal.editing = false;
+        this.memoryModal.editText = '';
+        await this.loadMemoryTab();
+      } catch(e) {
+        this.memoryModal.error = '保存失败：' + e.message;
+      } finally {
+        this.memoryModal.saving = false;
+      }
+    },
+    async appendMemoryFeedback() {
+      if (!this.memoryModal.appendText.trim()) return;
+      this.memoryModal.saving = true;
+      this.memoryModal.error = '';
+      try {
+        const r = await fetch(
+          `/api/memory/${this.memoryModal.studentId}/append-feedback`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              insight: this.memoryModal.appendText.trim(),
+              student_name: this.memoryModal.studentName,
+            }),
+          }
+        ).then(r => r.json());
+        if (r.error) { this.memoryModal.error = r.error; return; }
+        this.memoryModal.appendText = '';
+        await this.loadMemoryTab();
+      } catch(e) {
+        this.memoryModal.error = '追加失败：' + e.message;
+      } finally {
+        this.memoryModal.saving = false;
+      }
+    },
+    async consolidateMemory() {
+      this.memoryModal.saving = true;
+      this.memoryModal.error = '';
+      try {
+        const r = await fetch(
+          `/api/memory/${this.memoryModal.studentId}/consolidate`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+        ).then(r => r.json());
+        if (r.error) { this.memoryModal.error = r.error; return; }
+        if (!r.ok) { this.memoryModal.error = r.message || '整合未执行（需要 ANTHROPIC_API_KEY）'; return; }
+        await this.loadMemoryTab();
+      } catch(e) {
+        this.memoryModal.error = '整合失败：' + e.message;
+      } finally {
+        this.memoryModal.saving = false;
+      }
+    },
     async doPush() {
       this.pushModal.loading = true;
       this.pushModal.result = '';
@@ -1097,7 +1852,84 @@ function app() {
       this.pushModal.result = cnt > 0 ? `✓ 已推送 ${cnt} 道题目` : (r.message || '无匹配题目');
     },
 
-    // ── P3: 题库管理 ──
+    // ── Cron 任务管理 ──
+    openCronJobModal() {
+      this.cronJobModal = {
+        open: true,
+        saving: false,
+        error: '',
+        form: {
+          name: '',
+          teacher_id: '',
+          student_ids: [],
+          interval_minutes: 10,
+          schedule: '*/10 * * * *',
+          push_count: 3,
+          description: '',
+        },
+      };
+    },
+    getModalTeacherStudents() {
+      const tid = this.cronJobModal.form.teacher_id;
+      if (!tid) return [];
+      return this.students.filter(s =>
+        (s.bindings || []).some(b => b.teacher_id === tid)
+      );
+    },
+    toggleModalStudent(studentId, checked) {
+      const ids = [...this.cronJobModal.form.student_ids];
+      if (checked && !ids.includes(studentId)) ids.push(studentId);
+      if (!checked) ids.splice(ids.indexOf(studentId), 1);
+      this.cronJobModal.form.student_ids = ids;
+    },
+    async saveCronJob() {
+      const f = this.cronJobModal.form;
+      this.cronJobModal.error = '';
+      if (!f.name.trim()) { this.cronJobModal.error = '请填写任务名称'; return; }
+      if (!f.teacher_id)  { this.cronJobModal.error = '请选择老师'; return; }
+      if (!f.schedule.trim()) { this.cronJobModal.error = '请填写推题频率'; return; }
+
+      this.cronJobModal.saving = true;
+      const r = await fetch('/api/cron', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:        f.name.trim(),
+          teacher_id:  f.teacher_id,
+          student_ids: f.student_ids,
+          schedule:    f.schedule.trim(),
+          description: f.description.trim(),
+        }),
+      }).then(r => r.json());
+      this.cronJobModal.saving = false;
+
+      if (r.error) { this.cronJobModal.error = r.error; return; }
+
+      // 保存老师的 push_count
+      if (f.push_count) {
+        await fetch(`/api/teachers/${f.teacher_id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ push_count: Number(f.push_count) }),
+        });
+        const t = this.teachers.find(t => t.id === f.teacher_id);
+        if (t) t.push_count = Number(f.push_count);
+      }
+
+      this.cronJobModal.open = false;
+      await this.loadCron();
+    },
+    deleteCronJob(job) {
+      this.confirm = {
+        open: true,
+        title: '删除推题任务',
+        message: `确认删除任务「${job.name}」？系统 crontab 中的对应条目也将移除。`,
+        action: async () => {
+          await fetch(`/api/cron/${job.id}`, { method: 'DELETE' });
+          await this.loadCron();
+        },
+      };
+    },
     _showQToast(msg, ok = true) {
       this.qToast = { show: true, ok, msg };
       setTimeout(() => this.qToast.show = false, 2500);

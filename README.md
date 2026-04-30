@@ -106,3 +106,14 @@ openclaw gateway stop && openclaw gateway start
 | `difficulty_down_threshold` | 0.5 | 近10题正确率<此值则降难度 |
 
 运行时参数通过管理后台「系统设置」页修改，存入 `feishu/app_config.json`。
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [记忆系统说明](./docs/记忆系统说明.md) | 记忆系统使用指南 |
+| [ClaudeCode参考](./docs/ClaudeCode参考.md) | Claude Code 功能参考清单 |
+
+## 开发路线图
+
+参考 [ClaudeCode参考](./docs/ClaudeCode参考.md) 了解可借鉴的功能点。

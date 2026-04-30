@@ -32,10 +32,45 @@ from student_store import (
     load_roster, get_student_bindings, questions_json as _questions_json_path,
 )
 
+# 记忆写入（非阻塞，失败不影响主流程）
+try:
+    from memory_store import update_learning_progress
+    _MEMORY_ENABLED = True
+except ImportError:
+    _MEMORY_ENABLED = False
+
 ROSTER_JSON = Path(STUDENTS_DIR) / "roster.json"
 
 
 # ── 数据加载 / 保存 ───────────────────────────────────────────
+
+def _write_push_memory(student: dict, selected: list[dict], weak_topics: list[str]) -> None:
+    """
+    推题后写入学习进展记忆。
+    只在以下情形记录：有薄弱点推送、难度档位等关键节点。
+    """
+    student_id = student["student_id"]
+    student_name = student.get("name", student_id)
+    difficulty = student.get("current_difficulty", 3)
+
+    # 构建推送摘要
+    topic_tags = []
+    for q in selected:
+        topic_tags.extend(q.get("topic_tags", []))
+    unique_topics = list(dict.fromkeys(topic_tags))  # 去重保序
+
+    lines = [
+        f"推送 {len(selected)} 道题（难度档 {difficulty}）",
+    ]
+    if unique_topics:
+        lines.append(f"涉及知识点：{', '.join(f'`{t}`' for t in unique_topics[:5])}")
+    if weak_topics:
+        lines.append(f"本次侧重薄弱点：{', '.join(f'`{t}`' for t in weak_topics[:3])}")
+
+    progress_text = "，".join(lines[:1]) + "\n\n" + "\n\n".join(lines[1:])
+
+    update_learning_progress(student_id, progress_text, student_name=student_name)
+
 
 def load_questions_for_teacher(teacher_id: str) -> list[dict]:
     """按 teacher_id 加载对应题库，返回题目列表。"""
@@ -60,8 +95,10 @@ def load_roster() -> dict:
 
 # ── 去重过滤 ──────────────────────────────────────────────────
 
-def _recent_sent_ids(send_history: list[dict]) -> set[int]:
-    """返回 DEDUP_DAYS 天内已推送的题目 ID 集合"""
+def _recent_sent_ids(send_history: list[dict], dedup_days: int | None = None) -> set[int]:
+    """返回 dedup_days 天内已推送的题目 ID 集合。
+    dedup_days 为 None 时降级使用全局 DEDUP_DAYS。"""
+    effective_days = DEDUP_DAYS if dedup_days is None else dedup_days
     today = date.today()
     ids: set[int] = set()
     for record in send_history:
@@ -69,7 +106,7 @@ def _recent_sent_ids(send_history: list[dict]) -> set[int]:
             sent_date = date.fromisoformat(record.get("sent_at", ""))
         except ValueError:
             continue
-        if (today - sent_date).days < DEDUP_DAYS:
+        if (today - sent_date).days < effective_days:
             ids.add(record["question_id"])
     return ids
 
@@ -124,15 +161,16 @@ def score_question(q: dict, student: dict) -> float:
 
 # ── 选题逻辑 ──────────────────────────────────────────────────
 
-def select_questions(student: dict, questions: list[dict], push_count: int = PUSH_COUNT) -> list[dict]:
+def select_questions(student: dict, questions: list[dict], push_count: int = PUSH_COUNT, dedup_days: int | None = None) -> list[dict]:
     """
     按优先级选取 push_count 道题目（题库已按 teacher_id 过滤）。
     优先使用未推送或超出去重窗口的题目；
     不足时用曾推送但答错的题目补充（二刷）。
     当评分相同时随机选择，增加多样性。
+    dedup_days 为 None 时使用全局 DEDUP_DAYS。
     """
     send_history = student.get("send_history", [])
-    recent_ids   = _recent_sent_ids(send_history)
+    recent_ids   = _recent_sent_ids(send_history, dedup_days=dedup_days)
     wrong_ids    = _ever_sent_wrong_ids(send_history)
 
     fresh        = [q for q in questions if q["id"] not in recent_ids]
@@ -195,6 +233,7 @@ def record_push(student: dict, questions: list[dict]) -> dict:
                 "difficulty":     q.get("difficulty"),
                 "question_text":  q.get("question_text", ""),
                 "answer_text":    q.get("answer_text", ""),
+                "options":        q.get("options", {}),
             }
             for q in questions
         ],
@@ -297,7 +336,8 @@ def push(student_id: str, chat_id: str = "") -> dict:
         student["name"]       = student_entry.get("name", student_id)
 
     selected = select_questions(student, questions,
-                                push_count=roster.get("teachers", {}).get(teacher_id, {}).get("push_count", PUSH_COUNT))
+                                push_count=roster.get("teachers", {}).get(teacher_id, {}).get("push_count", PUSH_COUNT),
+                                dedup_days=roster.get("teachers", {}).get(teacher_id, {}).get("dedup_days"))
 
     if not selected:
         return {
@@ -323,6 +363,13 @@ def push(student_id: str, chat_id: str = "") -> dict:
         teacher_id=teacher_id,
         push_reason=push_reason,
     )
+
+    # ── 事件驱动记忆写入 ─────────────────────────────────────
+    if _MEMORY_ENABLED:
+        try:
+            _write_push_memory(student, selected, weak_topics)
+        except Exception:
+            pass  # 记忆写入失败不阻断主流程
 
     return result
 
@@ -398,6 +445,7 @@ def push_manual(student_id: str, chapter: str | None = None,
                 "topic_tags":     q.get("topic_tags", []),
                 "difficulty":     q.get("difficulty"),
                 "chapter":        q.get("chapter", ""),
+                "options":        q.get("options", {}),
             }
             for q in selected
         ],

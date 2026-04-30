@@ -94,7 +94,38 @@ export async function handleQuestionPush(params: {
   return true;
 }
 
-// ── 学生模式 ──────────────────────────────────────────────────
+// ── 卡片回调（答题按钮点击）────────────────────────────────────
+
+export async function handleCardAnswer(params: {
+  senderOpenId: string;
+  chatId: string;
+  messageId: string;   // 原卡片消息 ID，用于答题后变色
+  questionId: number;
+  answer: string;
+  cardId?: string;
+  seq?: number;
+  teacherId?: string;
+  log?: (...args: unknown[]) => void;
+}): Promise<boolean> {
+  const { senderOpenId, chatId, messageId, questionId, answer, cardId, seq, teacherId, log = console.log } = params;
+  log(`[question-push] card-answer → feishu_bot.py, question=${questionId}, answer=${answer}, card_id=${cardId}, seq=${seq}`);
+
+  const args = [
+    "--mode",      "card-answer",
+    "--sender-id", senderOpenId,
+    "--chat-id",   chatId,
+    "--message-id", messageId,
+    "--question-id", String(questionId),
+    "--answer",    answer,
+  ];
+  if (cardId) args.push("--card-id", cardId);
+  if (seq != null) args.push("--seq", String(seq));
+  if (teacherId) args.push("--teacher-id", teacherId);
+
+  await runFeishuBot(args);
+
+  return true;
+}
 
 export async function handleStudentMessage(params: {
   cfg?: unknown;

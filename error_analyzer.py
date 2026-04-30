@@ -34,6 +34,7 @@ _SYSTEM_PROMPT = """\
 - 第一句指出学生可能的错误原因（结合学生选项和正确答案）
 - 第二句解释正确答案的核心逻辑
 - 如有必要，第三句给出复习建议（具体到知识点）
+- 如果学生记忆中有相关的学习历史，结合历史给出更有针对性的建议
 - 不要重复题目原文，直接分析
 """
 
@@ -69,10 +70,20 @@ def analyze_error(
     profile = _load_student(student_id)
     weak_topics = profile.get("weak_topics", [])
 
+    # 学习记忆摘要（教学洞察 + 学习进展）
+    memory_summary = ""
+    try:
+        from student_store import load_context
+        ctx = load_context(student_id)
+        memory_summary = ctx.get("memory_summary", "")
+    except Exception:
+        pass
+
     # 构造 prompt
     option_lines = "\n".join(f"  {k}: {v}" for k, v in options.items()) if options else ""
+    memory_section = f"\n学生学习记忆：\n{memory_summary}" if memory_summary else ""
     user_prompt = f"""题目知识点：{', '.join(topic_tags)}
-学生薄弱点：{', '.join(weak_topics) if weak_topics else '暂无记录'}
+学生薄弱点：{', '.join(weak_topics) if weak_topics else '暂无记录'}{memory_section}
 
 题目内容（OCR，仅供参考）：
 {question_text or '（无文字信息）'}

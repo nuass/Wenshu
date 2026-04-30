@@ -6,12 +6,7 @@
       "subject": "AP统计",
       "questions_file": "output/chenxi/questions.json",
       "push_count": 3,
-      "answer_options": [
-        "A",
-        "B",
-        "C",
-        "D"
-      ],
+      "dedup_days": 0,
       "message_templates": {
         "correct": "✅ 正确！答案是 {correct_answer}，继续加油！",
         "wrong": "❌ 答案是 {correct_answer}，你选了 {student_answer}，来看看解析吧👇",

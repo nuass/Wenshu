@@ -22,6 +22,13 @@ from config import (
 from logger import log_grading_event
 from student_store import load_student, save_student
 
+# 记忆写入（非阻塞，失败不影响主流程）
+try:
+    from memory_store import append_teaching_feedback, update_learning_progress
+    _MEMORY_ENABLED = True
+except ImportError:
+    _MEMORY_ENABLED = False
+
 
 # ── 数据加载 / 保存 ───────────────────────────────────────────
 
@@ -192,6 +199,24 @@ def record(
 
     save_student(student)
 
+    # ── 事件驱动记忆写入 ─────────────────────────────────────
+    if _MEMORY_ENABLED:
+        try:
+            _write_answer_memory(
+                student=student,
+                question=question,
+                question_id=question_id,
+                submitted_answer=submitted_answer,
+                is_correct=is_correct,
+                mastery_before=mastery_before,
+                mastery_after=mastery_after,
+                difficulty_before=difficulty_before,
+                difficulty_after=difficulty_after,
+                topic=topic,
+            )
+        except Exception:
+            pass  # 记忆写入失败不阻断主流程
+
     return {
         "student_id":        student_id,
         "question_id":       question_id,
@@ -203,7 +228,89 @@ def record(
     }
 
 
+def _write_answer_memory(
+    student: dict,
+    question: dict | None,
+    question_id: int,
+    submitted_answer: str,
+    is_correct: bool,
+    mastery_before: float | None,
+    mastery_after: float | None,
+    difficulty_before: int,
+    difficulty_after: int,
+    topic: str | None,
+) -> None:
+    """
+    在答题后写入教学反馈记忆。
+    只记录值得关注的事件（连续出错、难度变化、掌握度显著变化），
+    避免每题都写入造成记忆噪声。
+    """
+    student_id = student["student_id"]
+    student_name = student.get("name", student_id)
+
+    insights = []
+
+    # 1. 难度档位变化
+    if difficulty_after != difficulty_before:
+        direction = "提升" if difficulty_after > difficulty_before else "降低"
+        insights.append(
+            f"**难度{direction}**：{difficulty_before} → {difficulty_after}（答题后自动调整）"
+        )
+
+    # 2. 掌握度显著下降（某知识点）
+    if topic and mastery_before is not None and mastery_after is not None:
+        delta = mastery_after - mastery_before
+        if delta <= -0.15:
+            insights.append(
+                f"**掌握度下降**：`{topic}` {mastery_before:.0%} → {mastery_after:.0%}"
+                f"（答错 Q{question_id}）"
+            )
+        elif delta >= 0.15 and mastery_before < 0.6:
+            insights.append(
+                f"**掌握度回升**：`{topic}` {mastery_before:.0%} → {mastery_after:.0%}"
+                f"（答对 Q{question_id}）"
+            )
+
+    # 3. 某知识点连续出错（最近该知识点 3 题均错）
+    if topic and not is_correct:
+        topic_history = [
+            r for r in student.get("send_history", [])
+            if r.get("answered") and r.get("is_correct") is not None
+        ]
+        topic_recent = [
+            r for r in topic_history
+            if question and topic in (
+                # 此处只能用 question_id 匹配，无法回溯 topic（近似判断用 send_history 最新 3 条）
+                []
+            )
+        ]
+        # 简化：检查近 5 道题是否有连续 3 道答错
+        recent_5 = topic_history[-5:]
+        wrong_streak = sum(1 for r in recent_5 if not r.get("is_correct"))
+        if wrong_streak >= 3:
+            insights.append(
+                f"**连续出错预警**：近 5 道题中 {wrong_streak} 道答错"
+                f"（当前 Q{question_id}，知识点 `{topic or '未知'}`）"
+                f"\n\n**建议**：考虑降低难度或增加该知识点专项练习。"
+            )
+
+    # 4. 如果本题有价值但不触发以上规则，也记录错误
+    elif not is_correct and question:
+        correct_ans = question.get("correct_answer", "?")
+        insights.append(
+            f"答错 Q{question_id}：学生选 `{submitted_answer}`，正确答案 `{correct_ans}`"
+            + (f"，知识点 `{topic}`" if topic else "")
+        )
+
+    if not insights:
+        return
+
+    insight_text = "\n\n".join(insights)
+    append_teaching_feedback(student_id, insight_text, student_name=student_name)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="记录学生答题结果并更新画像")
     parser = argparse.ArgumentParser(description="记录学生答题结果并更新画像")
     parser.add_argument("--student",  required=True,       help="学生 ID（如 stu_001）")
     parser.add_argument("--question", required=True, type=int, help="题目 ID（整数）")

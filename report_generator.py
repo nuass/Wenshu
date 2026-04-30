@@ -145,12 +145,23 @@ def generate_report(student_id: str, period: str = "week") -> str:
     stats = _compute_stats(history, mastery)
     raw = _build_raw_report(name, period_label, stats, difficulty)
 
+    # 学习记忆摘要（教学洞察 + 学习进展）
+    memory_section = ""
+    try:
+        from student_store import load_context
+        ctx = load_context(student_id)
+        memory_summary = ctx.get("memory_summary", "")
+        if memory_summary:
+            memory_section = f"\n\n学生历史学习记忆（供参考）：\n{memory_summary}"
+    except Exception:
+        pass
+
     try:
         resp = _client.chat.completions.create(
             model="claude-sonnet-4-5",
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"请根据以下数据生成学习报告：\n\n{raw}"},
+                {"role": "user", "content": f"请根据以下数据生成学习报告：\n\n{raw}{memory_section}"},
             ],
             max_tokens=300,
             temperature=0.4,

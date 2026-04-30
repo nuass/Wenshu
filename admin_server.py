@@ -25,6 +25,9 @@ admin_server.py
   - GET  /api/cron/push-interval  — 读取推题 cron 间隔（分钟）
   - POST /api/cron/push-interval  — 更新推题 cron 间隔
   - GET  /api/cron                — cron 任务列表
+  - POST /api/cron                — 新建 cron 任务
+  - PUT  /api/cron/<id>           — 更新 cron 任务（student_ids/schedule/name）
+  - DELETE /api/cron/<id>         — 删除 cron 任务
   - POST /api/cron/<id>/toggle    — 启用/禁用 cron 任务
 
 运行：
@@ -68,8 +71,14 @@ _CRON_PUSH_MARKER = "feishu_bot.py --mode teacher"
 
 def save_roster(roster: dict) -> None:
     ROSTER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(ROSTER_PATH, "w", encoding="utf-8") as f:
-        json.dump(roster, f, ensure_ascii=False, indent=2)
+    data = json.dumps(roster, ensure_ascii=False, indent=2)
+    tmp = ROSTER_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(ROSTER_PATH)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 # ── 用户认证 ──────────────────────────────────────────────────
@@ -226,7 +235,12 @@ def save_app_config(cfg: dict) -> None:
 def _get_crontab() -> str:
     """读取当前用户 crontab，失败返回空字符串。"""
     try:
-        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["crontab", "-l"],
+            capture_output=True,
+            text=True,
+            timeout=5,  # 最多等 5 秒
+        )
         return r.stdout if r.returncode == 0 else ""
     except Exception:
         return ""
@@ -234,7 +248,13 @@ def _get_crontab() -> str:
 
 def _set_crontab(content: str) -> None:
     """写入 crontab。"""
-    proc = subprocess.run(["crontab", "-"], input=content, text=True, capture_output=True)
+    proc = subprocess.run(
+        ["crontab", "-"],
+        input=content,
+        text=True,
+        capture_output=True,
+        timeout=5,  # 最多等 5 秒，防止挂住
+    )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "crontab write failed")
 
@@ -459,7 +479,7 @@ def api_teachers():
             "question_count": count_questions(tid),
             "student_count": bound,
             "push_count": t.get("push_count"),
-            "answer_options": t.get("answer_options"),
+            "dedup_days": t.get("dedup_days"),
         })
     return jsonify(result)
 
@@ -519,10 +539,10 @@ def api_teacher_update(teacher_id: str):
         if pc >= 1:
             t["push_count"] = pc
 
-    if "answer_options" in data:
-        opts = data["answer_options"]
-        if isinstance(opts, list) and all(isinstance(o, str) for o in opts) and len(opts) >= 2:
-            t["answer_options"] = [o.upper() for o in opts]
+    if "dedup_days" in data:
+        dd = int(data["dedup_days"])
+        if dd >= 0:
+            t["dedup_days"] = dd
 
     save_roster(roster)
     return jsonify({"ok": True})
@@ -810,18 +830,184 @@ def api_cron():
     return jsonify(data.get("jobs", []))
 
 
+def _load_cron_data() -> dict:
+    if not CRON_PATH.exists():
+        return {"jobs": []}
+    with open(CRON_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_cron_data(data: dict) -> None:
+    with open(CRON_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _rebuild_command(job: dict, roster: dict) -> str:
+    """根据 job 的 teacher_id / student_ids 重建 feishu_bot.py 命令行。"""
+    teacher_id = job.get("teacher_id", "")
+    student_ids = job.get("student_ids", [])
+
+    # 取第一个学生的 chat_id（多学生共用同一群时取第一个）
+    chat_id = ""
+    for sid in student_ids:
+        bindings = roster.get("students", {}).get(sid, {}).get("bindings", [])
+        for b in bindings:
+            if b.get("teacher_id") == teacher_id and b.get("chat_id"):
+                chat_id = b["chat_id"]
+                break
+        if chat_id:
+            break
+
+    parts = [
+        f"{AUTO_SEND_DIR}/feishu_bot.py",
+        "--mode teacher",
+    ]
+    for sid in student_ids:
+        parts.append(f"--target-id {sid}")
+    if chat_id:
+        parts.append(f"--chat-id {chat_id}")
+
+    return f"{PYTHON3} " + " ".join(parts)
+
+
+def _sync_crontab_for_job(job: dict) -> None:
+    """将单个 job 的 schedule+command 同步到系统 crontab（后台执行，失败不阻断）。"""
+    def _do_sync():
+        schedule = job.get("schedule", "")
+        command = job.get("command", "")
+        job_id = job.get("id", "")
+        enabled = job.get("enabled", True)
+        env_prefix = f"AUTO_SEND_DIR={AUTO_SEND_DIR} PYTHON3_BIN={PYTHON3} "
+        marker = f"# wenshu-job-{job_id}"
+
+        crontab = _get_crontab()
+        new_lines = [l for l in crontab.splitlines() if marker not in l and f"# wenshu-job-{job_id}" not in l]
+
+        if enabled and schedule and command:
+            new_lines.append(f"{schedule} {env_prefix}{command} {marker}")
+
+        try:
+            _set_crontab("\n".join(new_lines) + "\n")
+        except Exception:
+            pass  # crontab 写失败不阻断
+
+    t = threading.Thread(target=_do_sync, daemon=True)
+    t.start()
+
+
+@app.put("/api/cron/<job_id>")
+def api_cron_update(job_id: str):
+    """更新 cron job 的 student_ids / name / schedule / teacher_id，并重建 command + crontab。"""
+    if not is_admin():
+        return _403()
+    data = _load_cron_data()
+    job = next((j for j in data.get("jobs", []) if j["id"] == job_id), None)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    roster = load_roster()
+
+    if "name" in body:
+        job["name"] = str(body["name"]).strip()
+    if "description" in body:
+        job["description"] = str(body["description"]).strip()
+    if "teacher_id" in body:
+        tid = str(body["teacher_id"]).strip()
+        if tid and tid not in roster.get("teachers", {}):
+            return jsonify({"error": "teacher not found"}), 400
+        job["teacher_id"] = tid
+    if "student_ids" in body:
+        sids = body["student_ids"]
+        if not isinstance(sids, list):
+            return jsonify({"error": "student_ids 必须是数组"}), 400
+        job["student_ids"] = [str(s) for s in sids]
+    if "schedule" in body:
+        job["schedule"] = str(body["schedule"]).strip()
+
+    # 重建 command
+    job["command"] = _rebuild_command(job, roster)
+
+    _save_cron_data(data)
+    _sync_crontab_for_job(job)
+    return jsonify({"ok": True, "job": job})
+
+
+@app.post("/api/cron")
+def api_cron_create():
+    """新建 cron job，写入 cron_jobs.json 并注册到系统 crontab。"""
+    if not is_admin():
+        return _403()
+    body = request.get_json(silent=True) or {}
+    roster = load_roster()
+
+    name = (body.get("name") or "").strip()
+    teacher_id = (body.get("teacher_id") or "").strip()
+    student_ids = body.get("student_ids", [])
+    schedule = (body.get("schedule") or "").strip()
+    description = (body.get("description") or "").strip()
+
+    if not name:
+        return jsonify({"error": "name 必填"}), 400
+    if not teacher_id or teacher_id not in roster.get("teachers", {}):
+        return jsonify({"error": "teacher_id 无效"}), 400
+    if not schedule:
+        return jsonify({"error": "schedule 必填"}), 400
+
+    job = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "enabled": True,
+        "teacher_id": teacher_id,
+        "student_ids": [str(s) for s in student_ids],
+        "schedule": schedule,
+        "description": description,
+        "env": {"AUTO_SEND_DIR": AUTO_SEND_DIR, "PYTHON3_BIN": PYTHON3},
+        "log": str(Path(AUTO_SEND_DIR) / "logs" / "cron_push.log"),
+    }
+    job["command"] = _rebuild_command(job, roster)
+
+    data = _load_cron_data()
+    data.setdefault("jobs", []).append(job)
+    _save_cron_data(data)
+    _sync_crontab_for_job(job)
+    return jsonify({"ok": True, "job": job}), 201
+
+
+@app.delete("/api/cron/<job_id>")
+def api_cron_delete(job_id: str):
+    """删除 cron job，同时从系统 crontab 移除。"""
+    if not is_admin():
+        return _403()
+    data = _load_cron_data()
+    jobs = data.get("jobs", [])
+    job = next((j for j in jobs if j["id"] == job_id), None)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+
+    data["jobs"] = [j for j in jobs if j["id"] != job_id]
+    _save_cron_data(data)
+
+    # 从 crontab 移除
+    marker = f"# wenshu-job-{job_id}"
+    crontab = _get_crontab()
+    new_lines = [l for l in crontab.splitlines() if marker not in l]
+    try:
+        _set_crontab("\n".join(new_lines) + "\n")
+    except RuntimeError:
+        pass
+    return jsonify({"ok": True})
+
+
 @app.post("/api/cron/<job_id>/toggle")
 def api_cron_toggle(job_id: str):
-    if not CRON_PATH.exists():
-        return jsonify({"error": "cron_jobs.json not found"}), 404
-    with open(CRON_PATH, encoding="utf-8") as f:
-        data = json.load(f)
+    data = _load_cron_data()
     job = next((j for j in data.get("jobs", []) if j["id"] == job_id), None)
     if not job:
         return jsonify({"error": "job not found"}), 404
     job["enabled"] = not job.get("enabled", True)
-    with open(CRON_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _save_cron_data(data)
+    _sync_crontab_for_job(job)
     return jsonify({"ok": True, "enabled": job["enabled"]})
 
 
@@ -1108,6 +1294,326 @@ def api_image():
     mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif"}.get(suffix[1:], "image/png")
     with open(target, "rb") as f:
         return Response(f.read(), mimetype=mime)
+
+
+# ── 记忆 API ──────────────────────────────────────────────────
+
+@app.get("/api/memory/<student_id>")
+def api_memory_list(student_id: str):
+    """列出学生所有记忆文件（教学反馈、学习进展、学生画像）。"""
+    from memory_store import list_student_memories, MEMORY_ROOT
+    memories = list_student_memories(student_id)
+    return jsonify({
+        "student_id": student_id,
+        "memories": [
+            {
+                "type":       m["type"],
+                "meta":       m["meta"],
+                "content":    m["content"],
+                "path":       m["path"],
+            }
+            for m in memories
+        ],
+        "memory_root": str(MEMORY_ROOT),
+    })
+
+
+@app.put("/api/memory/<student_id>/<memory_type>")
+def api_memory_write(student_id: str, memory_type: str):
+    """
+    创建或覆盖学生指定类型的记忆文件。
+    Body: {"content": "...", "student_name": "..."}
+    """
+    from memory_store import write_student_memory
+    data = request.get_json(silent=True) or {}
+    content = data.get("content", "").strip()
+    student_name = data.get("student_name", "")
+
+    if not content:
+        return jsonify({"error": "content 不能为空"}), 400
+
+    try:
+        path = write_student_memory(
+            student_id, memory_type, content,
+            student_name=student_name
+        )
+        return jsonify({"ok": True, "path": str(path)})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/memory/<student_id>/append-feedback")
+def api_memory_append_feedback(student_id: str):
+    """
+    向学生「教学反馈」追加一条洞察（无需覆盖全文）。
+    Body: {"insight": "...", "student_name": "..."}
+    """
+    from memory_store import append_teaching_feedback
+    data = request.get_json(silent=True) or {}
+    insight = data.get("insight", "").strip()
+    student_name = data.get("student_name", "")
+
+    if not insight:
+        return jsonify({"error": "insight 不能为空"}), 400
+
+    try:
+        append_teaching_feedback(student_id, insight, student_name)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/memory/<student_id>/consolidate")
+def api_memory_consolidate(student_id: str):
+    """
+    调用 LLM（Claude Haiku）对学生记忆进行精选整合。
+    需要环境变量 ANTHROPIC_API_KEY 或 Body: {"api_key": "..."}
+    """
+    from memory_store import consolidate_memories, update_global_index
+    data = request.get_json(silent=True) or {}
+    api_key = data.get("api_key", "")
+
+    try:
+        result = consolidate_memories(student_id, api_key=api_key)
+        update_global_index()
+        if not result:
+            return jsonify({"ok": False, "message": "无可整合内容或缺少 API Key"}), 200
+        return jsonify({"ok": True, "consolidated_length": len(result)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/memory-index")
+def api_memory_index():
+    """返回全局 TEACHING_MEMORY.md 索引内容。"""
+    from memory_store import MEMORY_INDEX, update_global_index
+    try:
+        update_global_index()
+    except Exception:
+        pass
+    if not MEMORY_INDEX.exists():
+        return jsonify({"content": "（索引文件不存在）"})
+    with open(MEMORY_INDEX, encoding="utf-8") as f:
+        return jsonify({"content": f.read()})
+
+
+# ── 作业任务管理 ──────────────────────────────────────────────
+
+@app.get("/api/assignments")
+@require_login()
+def api_assignments_list():
+    """列出作业（老师只能看自己的，admin 看全部）。"""
+    import task_store
+    tid = current_teacher_id() if not is_admin() else None
+    assignments = task_store.list_assignments(teacher_id=tid)
+    result = []
+    for a in assignments:
+        summ = task_store.assignment_summary(a)
+        result.append({**a, **summ})
+    return jsonify(result)
+
+
+@app.post("/api/assignments")
+@require_login()
+def api_assignments_create():
+    """
+    创建作业并向所有绑定学生发送飞书通知。
+
+    Body JSON:
+      name         str   作业名称（必填）
+      due_date     str   截止日期 YYYY-MM-DD（必填）
+      description  str   作业说明（可选）
+      question_ids list  指定题目 ID 列表（可选）
+      chapter      str   按章节过滤（question_ids 为空时生效）
+      difficulty   int   难度过滤（可选）
+      student_ids  list  指定学生（不填则取老师所有绑定学生）
+    """
+    import task_store
+    from student_store import load_roster
+
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip()
+    due_date = (body.get("due_date") or "").strip()
+    if not name:
+        return jsonify({"error": "name 不能为空"}), 400
+    if not due_date:
+        return jsonify({"error": "due_date 不能为空"}), 400
+
+    teacher_id = current_teacher_id()
+    if not teacher_id and not is_admin():
+        return jsonify({"error": "无法确定 teacher_id"}), 403
+
+    # 确定目标学生
+    roster = load_roster()
+    all_students = roster.get("students", {})
+    if body.get("student_ids"):
+        target_sids = body["student_ids"]
+    else:
+        # 取该老师所有绑定学生
+        target_sids = [
+            sid for sid, info in all_students.items()
+            if any(b.get("teacher_id") == teacher_id for b in info.get("bindings", []))
+        ]
+
+    if not target_sids:
+        return jsonify({"error": "没有找到绑定学生"}), 400
+
+    # 构造 student_bindings（找到每个学生对应该老师的 chat_id）
+    student_bindings = []
+    for sid in target_sids:
+        info = all_students.get(sid, {})
+        binding = next(
+            (b for b in info.get("bindings", []) if b.get("teacher_id") == teacher_id),
+            info.get("bindings", [{}])[0] if info.get("bindings") else {}
+        )
+        student_bindings.append({"student_id": sid, "chat_id": binding.get("chat_id", "")})
+
+    # 计算题数（若指定了 question_ids）
+    question_ids: list[int] = [int(i) for i in (body.get("question_ids") or [])]
+
+    assignment = task_store.create_assignment(
+        name=name,
+        teacher_id=teacher_id or "admin",
+        student_bindings=student_bindings,
+        due_date=due_date,
+        description=body.get("description", ""),
+        question_ids=question_ids or None,
+        chapter=body.get("chapter") or None,
+        difficulty=int(body["difficulty"]) if body.get("difficulty") else None,
+    )
+
+    # 向学生发送飞书通知
+    notify_errors = []
+    for b in student_bindings:
+        sid = b["student_id"]
+        chat_id = b.get("chat_id", "")
+        if not chat_id:
+            continue
+        try:
+            _send_assignment_notify(assignment, sid, chat_id)
+            task_store.mark_student_notified(assignment["id"], sid)
+        except Exception as e:
+            notify_errors.append(f"{sid}: {e}")
+
+    resp = {"assignment": assignment, "notified": len(student_bindings) - len(notify_errors)}
+    if notify_errors:
+        resp["notify_errors"] = notify_errors
+    return jsonify(resp), 201
+
+
+@app.delete("/api/assignments/<assignment_id>")
+@require_login()
+def api_assignments_delete(assignment_id: str):
+    """删除作业。"""
+    import task_store
+    a = task_store.get_assignment(assignment_id)
+    if not a:
+        return jsonify({"error": "作业不存在"}), 404
+    if not is_admin() and a.get("teacher_id") != current_teacher_id():
+        return jsonify({"error": "无权删除"}), 403
+    task_store.delete_assignment(assignment_id)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/assignments/<assignment_id>")
+@require_login()
+def api_assignment_detail(assignment_id: str):
+    """获取作业详情（含各学生进度）。"""
+    import task_store
+    a = task_store.get_assignment(assignment_id)
+    if not a:
+        return jsonify({"error": "作业不存在"}), 404
+    summ = task_store.assignment_summary(a)
+    return jsonify({**a, **summ})
+
+
+@app.post("/api/assignments/<assignment_id>/remind")
+@require_login()
+def api_assignment_remind(assignment_id: str):
+    """手动向未完成的学生发送提醒。"""
+    import task_store
+    a = task_store.get_assignment(assignment_id)
+    if not a:
+        return jsonify({"error": "作业不存在"}), 404
+    if not is_admin() and a.get("teacher_id") != current_teacher_id():
+        return jsonify({"error": "无权操作"}), 403
+
+    reminded = 0
+    errors = []
+    for sid, sa in a["student_assignments"].items():
+        if sa["status"] in ("completed", "overdue"):
+            continue
+        chat_id = sa.get("chat_id", "")
+        if not chat_id:
+            continue
+        try:
+            _send_assignment_reminder(a, sid, chat_id, sa)
+            task_store.mark_student_reminded(assignment_id, sid)
+            reminded += 1
+        except Exception as e:
+            errors.append(f"{sid}: {e}")
+
+    return jsonify({"reminded": reminded, "errors": errors})
+
+
+def _send_assignment_notify(assignment: dict, student_id: str, chat_id: str) -> None:
+    """向学生发送新作业通知。"""
+    import lark_cli_send as lcs
+    from student_store import load_roster
+    roster = load_roster()
+    student_name = roster.get("students", {}).get(student_id, {}).get("name", student_id)
+
+    due = assignment.get("due_date", "")
+    total = assignment["student_assignments"][student_id].get("total", 0)
+    total_str = f"{total} 道题" if total else ""
+    desc = assignment.get("description", "")
+
+    lines = [
+        f"📋 {student_name}，你有一个新作业！",
+        f"",
+        f"📌 作业名称：{assignment['name']}",
+    ]
+    if desc:
+        lines.append(f"📝 说明：{desc}")
+    if total_str:
+        lines.append(f"📚 题目数量：{total_str}")
+    if due:
+        lines.append(f"⏰ 截止日期：{due}")
+    lines.extend([
+        f"",
+        f"发送 /任务 查看和开始作业",
+    ])
+    lcs.send_text(chat_id, "\n".join(lines))
+
+
+def _send_assignment_reminder(assignment: dict, student_id: str, chat_id: str, sa: dict) -> None:
+    """向学生发送作业截止提醒。"""
+    import lark_cli_send as lcs
+    from student_store import load_roster
+    from datetime import date as _date
+    roster = load_roster()
+    student_name = roster.get("students", {}).get(student_id, {}).get("name", student_id)
+
+    due = assignment.get("due_date", "")
+    progress = sa.get("progress", 0)
+    total = sa.get("total", 0)
+    progress_str = f"（已完成 {progress}/{total} 道）" if total else ""
+
+    days_left = ""
+    if due:
+        try:
+            delta = (_date.fromisoformat(due) - _date.today()).days
+            days_left = f"还有 {delta} 天" if delta > 0 else "今天截止"
+        except Exception:
+            pass
+
+    msg = (
+        f"⏰ {student_name}，作业「{assignment['name']}」{days_left}到期{progress_str}，"
+        f"发送 /任务 继续完成吧！"
+    )
+    lcs.send_text(chat_id, msg)
 
 
 # ── 管理界面 ──────────────────────────────────────────────────

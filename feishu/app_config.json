@@ -1,6 +1,6 @@
 {
   "_comment": "全局运行时配置，优先级高于 config.py 默认值。通过管理后台 POST /api/config 修改。",
-  "dedup_days": 7,
+  "dedup_days": 0,
   "mastery_threshold": 0.6,
   "difficulty_up_threshold": 0.8,
   "difficulty_down_threshold": 0.5

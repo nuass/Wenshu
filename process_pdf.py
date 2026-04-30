@@ -195,7 +195,11 @@ def _parse_json_response(content: str) -> dict | list:
 
 def detect_question_boundaries(client: OpenAI, img_path: str, model: str, is_answer_page: bool = False) -> list[dict]:
     """
-    调用视觉模型检测页面中各题目的垂直边界位置。
+    3步 CoT 检测页面中各题目的垂直边界位置。
+
+    Step 1 — 页面排版判断：识别列数、题号格式、选项格式、是否有图表
+    Step 2 — 题目整体分布：列出每道题的题号和大致位置区间
+    Step 3 — 细粒度边界：输出精确的 top_ratio / bottom_ratio
 
     返回列表，每项格式：
         {
@@ -207,74 +211,138 @@ def detect_question_boundaries(client: OpenAI, img_path: str, model: str, is_ans
         }
     若页面无题目（封面/目录页/纯答案页），返回空列表。
     """
+    img_b64 = _encode_image(img_path)
+    img_content = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "high"},
+    }
+
+    # ── Step 1: 页面排版判断 ──────────────────────────────────
     if is_answer_page:
-        prompt = (
-            "请分析这张解析页面，识别其中所有解析的边界。\n\n"
-            "**严格判断标准**：\n"
-            "- 数页面上有几个'习题'标题，就返回几条解析\n"
-            "- 每条解析边界：从'习题 X'标题开始（包含标题）到下一个'习题'标题之前\n"
-            "- **重要**：top_ratio 必须包含'习题'标题，宁可多切一些上方内容\n"
-            "- 绝对不要将多条解析合并\n\n"
-            "返回严格的 JSON 格式：\n"
-            "{\n"
-            '  "questions": [\n'
-            "    {\n"
-            '      "question_number": <习题编号>,\n'
-            '      "top_ratio": <包含习题标题的顶部，0.0-1.0>,\n'
-            '      "bottom_ratio": <解析底部，0.0-1.0>,\n'
-            '      "continues_from_previous": false,\n'
-            '      "continues_to_next": false\n'
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
-            "注意：无解析内容返回 {\"questions\": []}"
+        step1_prompt = (
+            "请仔细观察这张解析页面，描述其排版特征：\n"
+            "1. 页面是单栏还是双栏？\n"
+            "2. 解析的题号格式是什么？（如'习题1'、'1.'、'Q1'、纯数字等）\n"
+            "3. 每条解析的起始标志是什么？（标题行、分隔线、缩进等）\n"
+            "4. 页面上大约有几条解析？\n"
+            "5. 是否有图表、化学结构式或公式？\n"
+            "请直接描述，不要输出 JSON。"
         )
     else:
-        prompt = (
-            "请分析这张 AP 题目页面图片，识别其中所有题目的边界位置。\n\n"
-            "**严格判断标准**：\n"
-            "- 每道题 = 1个题干 + 恰好1组选项 (A)(B)(C)(D)(E)\n"
-            "- 数页面上有几组 (A)(B)(C)(D)(E)，就返回几道题\n"
-            "- 题目边界：从习题号（如'习题8'）开始到 (E) 选项结束\n"
-            "- **重要**：必须包含习题号，宁可多切一些边界，绝对不要让题目不完整\n"
-            "- 如果习题号在题干上方，top_ratio 要包含习题号\n\n"
-            "返回严格的 JSON 格式：\n"
-            "{\n"
-            '  "questions": [\n'
-            "    {\n"
-            '      "question_number": <习题号，如"习题8"中的8>,\n'
-            '      "top_ratio": <包含习题号的顶部位置，0.0-1.0>,\n'
-            '      "bottom_ratio": <(E)选项底部位置，0.0-1.0>,\n'
-            '      "continues_from_previous": false,\n'
-            '      "continues_to_next": false\n'
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
-            "注意：封面/目录页返回 {\"questions\": []}"
+        step1_prompt = (
+            "请仔细观察这张 AP 题目页面，描述其排版特征：\n"
+            "1. 页面是单栏还是双栏？\n"
+            "2. 题号格式是什么？（如'习题1'、'1.'、'Question 1'、纯数字等）\n"
+            "3. 选项格式是什么？（如'(A)(B)(C)(D)'、'A. B. C. D.'、字母加括号等）\n"
+            "4. 选项有几个？（4个还是5个）\n"
+            "5. 页面上大约有几道题？\n"
+            "6. 是否有图表、图片、化学结构式或公式嵌入题目中？\n"
+            "请直接描述，不要输出 JSON。"
         )
 
     try:
-        response = client.chat.completions.create(
+        r1 = client.chat.completions.create(
             model=model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{_encode_image(img_path)}",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }],
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": step1_prompt}, img_content,
+            ]}],
+            max_tokens=512,
+        )
+        layout_desc = r1.choices[0].message.content.strip()
+        print(f"    [排版] {layout_desc[:80].replace(chr(10), ' ')}...")
+    except Exception as e:
+        print(f"✗ Step1 排版判断失败: {e}")
+        layout_desc = ""
+
+    # ── Step 2: 题目整体分布 ──────────────────────────────────
+    if is_answer_page:
+        step2_prompt = (
+            f"根据以下排版描述：\n{layout_desc}\n\n"
+            "请列出这张解析页面上每条解析的题号和大致垂直位置（用页面高度百分比表示）。\n"
+            "格式：题号X 约在 Y%-Z% 位置\n"
+            "注意：\n"
+            "- 只列出能看到完整起始标志的解析\n"
+            "- 如果某条解析从上一页延续过来（页面顶部没有题号标志），标注'续上页'\n"
+            "- 如果某条解析延续到下一页（页面底部没有结束），标注'续下页'\n"
+            "请直接列出，不要输出 JSON。"
+        )
+    else:
+        step2_prompt = (
+            f"根据以下排版描述：\n{layout_desc}\n\n"
+            "请列出这张题目页面上每道题的题号和大致垂直位置（用页面高度百分比表示）。\n"
+            "格式：题号X 约在 Y%-Z% 位置\n"
+            "注意：\n"
+            "- 只列出能看到完整题干+选项的题目\n"
+            "- 如果某道题从上一页延续过来（页面顶部只有选项没有题干），标注'续上页'\n"
+            "- 如果某道题延续到下一页（页面底部题目不完整），标注'续下页'\n"
+            "- 如果页面是封面/目录/空白页，直接说'无题目'\n"
+            "请直接列出，不要输出 JSON。"
+        )
+
+    try:
+        r2 = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": [
+                    {"type": "text", "text": step1_prompt}, img_content,
+                ]},
+                {"role": "assistant", "content": layout_desc},
+                {"role": "user", "content": step2_prompt},
+            ],
+            max_tokens=1024,
+        )
+        distribution_desc = r2.choices[0].message.content.strip()
+        print(f"    [分布] {distribution_desc[:80].replace(chr(10), ' ')}...")
+    except Exception as e:
+        print(f"✗ Step2 分布分析失败: {e}")
+        distribution_desc = ""
+
+    # ── Step 3: 细粒度边界输出 ────────────────────────────────
+    if is_answer_page:
+        step3_prompt = (
+            "根据上面的分析，现在输出精确的解析边界。\n\n"
+            "规则：\n"
+            "- top_ratio：解析起始标题行的顶部（宁可多包含一点上方空白）\n"
+            "- bottom_ratio：解析最后一行文字的底部（宁可多包含一点下方空白）\n"
+            "- continues_from_previous：该解析是否从上一页延续（页面顶部无题号标志）\n"
+            "- continues_to_next：该解析是否延续到下一页（页面底部解析不完整）\n\n"
+            "返回严格 JSON，不要有任何其他文字：\n"
+            '{"questions": [{"question_number": <int>, "top_ratio": <0.0-1.0>, '
+            '"bottom_ratio": <0.0-1.0>, "continues_from_previous": <bool>, "continues_to_next": <bool>}]}\n'
+            "无解析内容返回 {\"questions\": []}"
+        )
+    else:
+        step3_prompt = (
+            "根据上面的分析，现在输出精确的题目边界。\n\n"
+            "规则：\n"
+            "- top_ratio：题号行的顶部（必须包含题号，宁可多包含一点上方空白）\n"
+            "- bottom_ratio：最后一个选项的底部（必须包含所有选项，宁可多包含一点下方空白）\n"
+            "- continues_from_previous：该题是否从上一页延续（页面顶部只有选项没有题干）\n"
+            "- continues_to_next：该题是否延续到下一页（页面底部选项不完整）\n\n"
+            "返回严格 JSON，不要有任何其他文字：\n"
+            '{"questions": [{"question_number": <int>, "top_ratio": <0.0-1.0>, '
+            '"bottom_ratio": <0.0-1.0>, "continues_from_previous": <bool>, "continues_to_next": <bool>}]}\n'
+            "封面/目录/无题目页返回 {\"questions\": []}"
+        )
+
+    try:
+        r3 = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": [
+                    {"type": "text", "text": step1_prompt}, img_content,
+                ]},
+                {"role": "assistant", "content": layout_desc},
+                {"role": "user", "content": step2_prompt},
+                {"role": "assistant", "content": distribution_desc},
+                {"role": "user", "content": step3_prompt},
+            ],
             max_tokens=2048,
         )
-        result = _parse_json_response(response.choices[0].message.content)
+        result = _parse_json_response(r3.choices[0].message.content)
         return result.get("questions", [])
     except Exception as e:
-        print(f"✗ 边界检测失败: {e}")
+        print(f"✗ Step3 边界输出失败: {e}")
         return []
 
 
@@ -325,10 +393,13 @@ def parse_question_metadata(
     subject: str = "AP统计",
 ) -> dict:
     """
-    AI 结构化解析单道题目，返回：
-        chapter / topic_tags / difficulty / question_type /
-        correct_answer / question_text / options / answer_text
-    subject 参数影响 prompt 中的章节示例和难度描述。
+    3步 CoT 结构化解析单道题目：
+        Step 1 — OCR：忠实提取图片中所有文字（题干、选项、图表描述）
+        Step 2 — 推理：逐步分析，得出正确答案和解析
+        Step 3 — 结构化：输出 JSON
+
+    返回：chapter / topic_tags / difficulty / question_type /
+          correct_answer / question_text / options / answer_text
     """
     if "统计" in subject or "statistics" in subject.lower():
         chapter_hint    = "如：描述统计/概率分布/推断统计/回归分析/抽样分布等"
@@ -340,54 +411,124 @@ def parse_question_metadata(
         chapter_hint    = "根据题目内容判断所属章节"
         difficulty_hint = "1=基础，2=简单，3=中等，4=较难，5=难题"
 
-    prompt = (
-        f"请分析这道 {subject} 题目，返回严格的 JSON 格式：\n"
+    has_answer_img = bool(a_img_path and os.path.exists(a_img_path))
+
+    # 构建图片内容块
+    q_img_block = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{_encode_image(q_img_path)}", "detail": "high"},
+    }
+    a_img_block = None
+    if has_answer_img:
+        a_img_block = {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_encode_image(a_img_path)}", "detail": "high"},
+        }
+
+    # ── Step 1: OCR 提取 ──────────────────────────────────────
+    step1_user_content: list[dict] = [
+        {"type": "text", "text": (
+            "请忠实提取这道题目图片中的所有文字内容，包括：\n"
+            "- 题号（如果有）\n"
+            "- 完整题干（包括所有条件、数据、图表描述）\n"
+            "- 所有选项（A/B/C/D/E，一字不漏）\n"
+            "- 如果有图表/图片，描述其内容（坐标轴、数据点、趋势等）\n"
+            "- 数学公式用 LaTeX 格式（行内 $...$，独立 $$...$$）\n\n"
+            "只输出提取的文字，不要分析或推断，不要输出 JSON。"
+        )},
+        q_img_block,
+    ]
+    if has_answer_img:
+        step1_user_content += [
+            {"type": "text", "text": "以下是该题的解析图片，同样请忠实提取所有文字："},
+            a_img_block,
+        ]
+
+    try:
+        r1 = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": step1_user_content}],
+            max_tokens=2048,
+        )
+        ocr_text = r1.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"✗ Step1 OCR 失败: {e}")
+        return {}
+
+    # ── Step 2: 推理分析 ──────────────────────────────────────
+    if has_answer_img:
+        step2_prompt = (
+            f"这是一道 {subject} 题目，以下是从图片中提取的文字：\n\n"
+            f"{ocr_text}\n\n"
+            "解析图片中已包含答案和解析。请：\n"
+            "1. 从解析中找出正确答案（A/B/C/D/E）\n"
+            "2. 用自己的话总结解析思路（2-4句话）\n"
+            "3. 判断所属章节和核心知识点\n"
+            "4. 评估难度（1-5）\n\n"
+            "请逐步分析，不要输出 JSON。"
+        )
+    else:
+        step2_prompt = (
+            f"这是一道 {subject} 题目，以下是从图片中提取的文字：\n\n"
+            f"{ocr_text}\n\n"
+            "请逐步分析：\n"
+            "1. 题目考查的核心知识点是什么？\n"
+            "2. 逐一分析每个选项，判断正误\n"
+            "3. 得出正确答案（A/B/C/D/E），如果图片不完整导致无法确定则说明原因\n"
+            "4. 判断所属章节\n"
+            "5. 评估难度（1-5）\n\n"
+            "请逐步推理，不要输出 JSON。"
+        )
+
+    try:
+        r2 = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "user", "content": step1_user_content},
+                {"role": "assistant", "content": ocr_text},
+                {"role": "user", "content": step2_prompt},
+            ],
+            max_tokens=2048,
+        )
+        reasoning = r2.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"✗ Step2 推理失败: {e}")
+        return {}
+
+    # ── Step 3: 结构化输出 ────────────────────────────────────
+    step3_prompt = (
+        "根据以上分析，输出严格 JSON，不要有任何其他文字：\n"
         "{\n"
         f'  "chapter": "<所属章节，{chapter_hint}>",\n'
         '  "topic_tags": ["<核心知识点1>", "<核心知识点2>"],\n'
-        '  "difficulty": <1到5的整数>,\n'
+        f'  "difficulty": <{difficulty_hint}>,\n'
         '  "question_type": "<单选|多选|自由作答>",\n'
-        '  "correct_answer": "<A|B|C|D|E 或 null>",\n'
-        '  "question_text": "<题干文字>",\n'
-        '  "options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},\n'
-        '  "answer_text": "<解析文字>"\n'
-        "}\n\n"
-        "**重要**：topic_tags 最多 2-3 个核心知识点，不要列举所有相关概念"
+        '  "correct_answer": "<A|B|C|D|E，若确实无法判断则填 null>",\n'
+        '  "question_text": "<完整题干，LaTeX 公式保留>",\n'
+        '  "options": {"A": "...", "B": "...", "C": "...", "D": "..."},\n'
+        '  "answer_text": "<解析文字，2-5句，说明为什么选这个答案>"\n'
+        "}\n"
+        "注意：topic_tags 最多 3 个；options 只包含实际存在的选项键。"
     )
 
-    content_parts: list[dict] = [
-        {"type": "text", "text": prompt},
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{_encode_image(q_img_path)}",
-                "detail": "high",
-            },
-        },
-    ]
-
-    if a_img_path and os.path.exists(a_img_path):
-        content_parts.append({"type": "text", "text": "以下是该题目的解析图片："})
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{_encode_image(a_img_path)}",
-                "detail": "high",
-            },
-        })
-
     try:
-        response = client.chat.completions.create(
+        r3 = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": content_parts}],
+            messages=[
+                {"role": "user", "content": step1_user_content},
+                {"role": "assistant", "content": ocr_text},
+                {"role": "user", "content": step2_prompt},
+                {"role": "assistant", "content": reasoning},
+                {"role": "user", "content": step3_prompt},
+            ],
             max_tokens=2048,
         )
-        result = _parse_json_response(response.choices[0].message.content)
+        result = _parse_json_response(r3.choices[0].message.content)
         if isinstance(result, list):
             result = result[0] if result else {}
         return result if isinstance(result, dict) else {}
     except Exception as e:
-        print(f"✗ 结构化解析失败: {e}")
+        print(f"✗ Step3 结构化输出失败: {e}")
         return {}
 
 

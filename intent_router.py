@@ -170,6 +170,13 @@ def route(student_id: str, message: str, chat_id: str = "") -> dict:
         message:    学生原始消息（已剥离飞书标签）。
         chat_id:    消息来源群 chat_id，透传给 push_engine 写入日志。
     """
+    # 斜杠命令优先：跳过 AI 意图识别，直接路由
+    if message.startswith("/"):
+        from slash_command import handle_slash
+        slash_result = handle_slash(student_id, message, chat_id=chat_id)
+        if slash_result is not None:
+            return slash_result
+
     intent = classify_intent(message)
 
     if intent.type == "push_questions":

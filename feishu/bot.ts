@@ -31,6 +31,7 @@ import {
   parseQuestionPushTarget,
   handleQuestionPush,
   handleStudentMessage,
+  handleCardAnswer,
 } from "./question-push.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -1576,4 +1577,53 @@ export async function handleFeishuMessage(params: {
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
+}
+
+// ── 卡片回调事件（按钮点击）────────────────────────────────────
+
+export type FeishuCardActionEvent = {
+  operator: {
+    open_id?: string;
+    user_id?: string;
+  };
+  open_chat_id: string;
+  open_message_id: string;
+  action: {
+    value: {
+      question_id?: number;
+      answer?: string;
+      message_id?: string;
+    };
+    tag?: string;
+  };
+};
+
+export async function handleFeishuCardAction(
+  event: FeishuCardActionEvent,
+  log: (...args: any[]) => void = console.log,
+): Promise<void> {
+  const senderOpenId = event.operator.open_id ?? event.operator.user_id ?? "";
+  const chatId = event.open_chat_id;
+  const messageId = event.open_message_id;
+  const { question_id, answer, card_id, seq, teacher_id } = event.action.value ?? {};
+
+  if (!senderOpenId || !chatId || question_id == null || !answer) {
+    log(`[feishu] card action missing required fields: ${JSON.stringify(event.action.value)}`);
+    return;
+  }
+
+  log(`[feishu] card action: sender=${senderOpenId}, question=${question_id}, answer=${answer}`);
+
+  // 立即返回，后台异步处理（避免超过飞书 3s 超时限制报 200671）
+  handleCardAnswer({
+    senderOpenId,
+    chatId,
+    messageId,
+    questionId: question_id,
+    answer,
+    cardId: card_id,
+    seq: seq != null ? Number(seq) : undefined,
+    teacherId: teacher_id,
+    log,
+  }).catch((err) => log(`[feishu] handleCardAnswer error: ${err}`));
 }
